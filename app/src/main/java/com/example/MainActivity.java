@@ -7,6 +7,8 @@ import android.widget.FrameLayout;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.fragment.app.Fragment;
 
+import com.example.ai.ApiKeyManager;
+import com.example.cloud.CloudProvider;
 import com.example.runtime.ProjectRuntime;
 import com.example.ui.AssetsFragment;
 import com.example.ui.CreateFragment;
@@ -78,8 +80,10 @@ public class MainActivity extends AppCompatActivity {
             rootContainer.addView(floatingConsole, consoleParams);
         }
 
-        // Write boot diagnostic log line
-        VynaraLogger.system("Vynara initialized cleanly.");
+        // Write boot diagnostic log line & active compute provider state
+        ApiKeyManager keyManager = projectRuntime.getAIOrchestrator().getApiKeyManager();
+        CloudProvider provider = keyManager.getComputeProvider();
+        VynaraLogger.system("Vynara engine initialized cleanly. Active compute pipeline: " + provider.getDisplayName());
     }
 
     public void loadFragment(Fragment fragment) {
