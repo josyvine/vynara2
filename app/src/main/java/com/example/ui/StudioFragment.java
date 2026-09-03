@@ -17,12 +17,14 @@ import androidx.fragment.app.Fragment;
 import com.example.MainActivity;
 import com.example.R;
 import com.example.character.Character;
+import com.example.engine.GLTFImporter;
 import com.example.engine.Scene;
 import com.example.engine.SceneObject;
 import com.example.engine.StudioGLRenderer;
 import com.example.engine.ThreeDEngine;
 import com.example.export.GLTFExporter;
 import com.example.runtime.ProjectRuntime;
+import com.example.utils.VynaraLogger;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -259,6 +261,42 @@ public class StudioFragment extends Fragment {
                 AiAssistantDialogFragment dialog = new AiAssistantDialogFragment();
                 dialog.show(getChildFragmentManager(), "AiAssistantDialog");
             });
+        }
+    }
+
+    public void loadAndDisplayGLBFile(File glbFile) {
+        if (glbFile == null || !glbFile.exists() || engine == null) return;
+
+        try {
+            VynaraLogger.system("StudioFragment: Loading external GLB into active scene: " + glbFile.getName());
+            GLTFImporter.ImportResult result = GLTFImporter.loadFromFile(glbFile);
+
+            runtime.getTransactionManager().beginTransaction("Import GLB Model");
+
+            for (SceneObject obj : result.getSceneObjects()) {
+                engine.getSceneManager().getActiveScene().addObject(obj);
+            }
+
+            for (Character ch : result.getCharacters()) {
+                runtime.getCharacterManager().registerCharacter(ch);
+                engine.getSceneManager().getActiveScene().addObject(new SceneObject(ch.getName(), ch.getMesh()));
+            }
+
+            engine.getSceneManager().updateWorldTransforms();
+            runtime.getTransactionManager().commitTransaction();
+
+            if (getActivity() != null) {
+                getActivity().runOnUiThread(() -> {
+                    updateStudioStatsUI();
+                    Toast.makeText(getContext(), "Imported: " + glbFile.getName(), Toast.LENGTH_SHORT).show();
+                });
+            }
+
+        } catch (Exception e) {
+            VynaraLogger.e("StudioFragment: Failed loading GLB file", e);
+            if (getActivity() != null) {
+                getActivity().runOnUiThread(() -> Toast.makeText(getContext(), "Import error: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
         }
     }
 
