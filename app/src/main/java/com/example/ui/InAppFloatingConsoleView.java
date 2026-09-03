@@ -143,7 +143,7 @@ public class InAppFloatingConsoleView extends FrameLayout implements VynaraLogge
         if (tvLogOutput == null || entry == null) return;
 
         String hexColor = getHexColorForLog(entry);
-        String prefix = entry.getFormattedTime() + " " + entry.getTag().name();
+        String prefix = entry.getFormattedTime() + " " + (entry.getTag() != null ? entry.getTag().name() : "LOG");
         String htmlLine = "<font color=\"" + hexColor + "\"><b>" + prefix + "</b>: " + entry.getMessage() + "</font><br/>";
 
         tvLogOutput.append(Html.fromHtml(htmlLine));
@@ -161,6 +161,8 @@ public class InAppFloatingConsoleView extends FrameLayout implements VynaraLogge
         if (entry.getLevel() == VynaraLogger.LogLevel.WARNING) {
             return "#FFD700"; // Dynamic Alert Gold/Yellow
         }
+
+        if (entry.getTag() == null) return "#FFFFFF";
 
         switch (entry.getTag()) {
             case SYSTEM:
@@ -202,17 +204,21 @@ public class InAppFloatingConsoleView extends FrameLayout implements VynaraLogge
 
     @Override
     public void onLogAdded(VynaraLogger.LogEntry entry) {
-        // Discard background thread updates if view became detached during draw tick
-        if (isAttachedToWindow()) {
-            appendLog(entry);
-        }
+        // Safe UI thread posting for logs emitted from background OkHttp / Cloud threads
+        post(() -> {
+            if (isAttachedToWindow()) {
+                appendLog(entry);
+            }
+        });
     }
 
     @Override
     public void onLogsCleared() {
-        if (tvLogOutput != null && isAttachedToWindow()) {
-            tvLogOutput.setText("");
-        }
+        post(() -> {
+            if (tvLogOutput != null && isAttachedToWindow()) {
+                tvLogOutput.setText("");
+            }
+        });
     }
 
     public void setDragEnabled(boolean enabled) {
