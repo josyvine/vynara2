@@ -1,14 +1,48 @@
 package com.example.asset;
 
+import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
+
+import com.example.utils.VynaraLogger;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
 
 public class AssetManager {
+    private static final String TAG = "AssetManager";
+    private static final String CACHE_SUBDIR = "models_cache";
+
     private final List<Asset> assets = new ArrayList<>();
+    private final OkHttpClient httpClient;
+    private final Handler mainHandler;
+
+    public interface OnAssetReadyListener {
+        void onProgress(int percentage);
+        void onSuccess(File assetFile);
+        void onError(String message);
+    }
 
     public AssetManager() {
         // Phase 15 Alignment: Purged hardcoded mock sample assets.
         // The asset library is populated dynamically from generated 3D files stored locally.
+        this.httpClient = new OkHttpClient.Builder()
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .build();
+        this.mainHandler = new Handler(Looper.getMainLooper());
     }
 
     public void setAssets(List<Asset> loadedAssets) {
@@ -82,5 +116,129 @@ public class AssetManager {
 
     public void clearAssets() {
         assets.clear();
+    }
+
+    // ==========================================
+    // On-Demand Asset Streaming & Disk Caching
+    // ==========================================
+
+    public void fetchAssetOnDemand(Context context, String assetId, String downloadUrl, OnAssetReadyListener listener) {
+        if (context == null || assetId == null || assetId.trim().isEmpty()) {
+            if (listener != null) listener.onError("Invalid asset identification or context.");
+            return;
+        }
+
+        File cacheDir = new File(context.getFilesDir(), CACHE_SUBDIR);
+        if (!cacheDir.exists()) {
+            cacheDir.mkdirs();
+        }
+
+        String fileName = assetId.endsWith(".glb") ? assetId : assetId + ".glb";
+        File localFile = new File(cacheDir, fileName);
+
+        // Fast Path: Check if model is already stored locally on disk
+        if (localFile.exists() && localFile.length() > 0) {
+            VynaraLogger.i(TAG, "Cache hit for asset: " + assetId + " (" + localFile.length() + " bytes)");
+            if (listener != null) {
+                listener.onProgress(100);
+                listener.onSuccess(localFile);
+            }
+            return;
+        }
+
+        if (downloadUrl == null || downloadUrl.trim().isEmpty()) {
+            if (listener != null) {
+                listener.onError("Asset is not cached locally and no remote download URL was provided.");
+            }
+            return;
+        }
+
+        VynaraLogger.i(TAG, "Streaming asset on-demand from: " + downloadUrl);
+
+        Request request = new Request.Builder()
+                .url(downloadUrl.trim())
+                .header("User-Agent", "Vynara-3D-Studio-Android")
+                .get()
+                .build();
+
+        httpClient.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                VynaraLogger.e(TAG, "Asset stream connection error: " + e.getMessage(), e);
+                if (listener != null) {
+                    mainHandler.post(() -> listener.onError("Network stream failed: " + e.getMessage()));
+                }
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                if (!response.isSuccessful() || response.body() == null) {
+                    if (listener != null) {
+                        mainHandler.post(() -> listener.onError("Server returned HTTP " + response.code()));
+                    }
+                    response.close();
+                    return;
+                }
+
+                ResponseBody body = response.body();
+                long totalBytes = body.contentLength();
+
+                try (InputStream is = body.byteStream();
+                     FileOutputStream fos = new FileOutputStream(localFile)) {
+
+                    byte[] buffer = new byte[8192];
+                    long totalBytesRead = 0;
+                    int read;
+
+                    while ((read = is.read(buffer)) != -1) {
+                        fos.write(buffer, 0, read);
+                        totalBytesRead += read;
+
+                        if (totalBytes > 0 && listener != null) {
+                            int progress = (int) ((totalBytesRead * 100) / totalBytes);
+                            mainHandler.post(() -> listener.onProgress(progress));
+                        }
+                    }
+                    fos.flush();
+
+                    if (localFile.exists() && localFile.length() > 0) {
+                        Asset downloadedAsset = new Asset(assetId, assetId, "STREAMED", localFile.getAbsolutePath());
+                        addAsset(downloadedAsset);
+
+                        if (listener != null) {
+                            mainHandler.post(() -> listener.onSuccess(localFile));
+                        }
+                    } else {
+                        if (listener != null) {
+                            mainHandler.post(() -> listener.onError("Downloaded file is empty."));
+                        }
+                    }
+
+                } catch (Exception ex) {
+                    if (localFile.exists()) {
+                        localFile.delete();
+                    }
+                    VynaraLogger.e(TAG, "Failed writing streamed asset to storage", ex);
+                    if (listener != null) {
+                        mainHandler.post(() -> listener.onError("File storage error: " + ex.getMessage()));
+                    }
+                } finally {
+                    response.close();
+                }
+            }
+        });
+    }
+
+    public File getLocalCachedFile(Context context, String assetId) {
+        if (context == null || assetId == null) return null;
+        File cacheDir = new File(context.getFilesDir(), CACHE_SUBDIR);
+        String fileName = assetId.endsWith(".glb") ? assetId : assetId + ".glb";
+        File file = new File(cacheDir, fileName);
+        return file.exists() ? file : null;
+    }
+
+    public boolean isAssetCached(Context context, String assetId) {
+        File file = getLocalCachedFile(context, assetId);
+        return file != null && file.length() > 0;
     }
 }
