@@ -1,18 +1,31 @@
 package com.example.tools;
 
+import com.example.ai.ApiKeyManager;
+import com.example.asset.AssetManager;
 import com.example.character.Character;
 import com.example.character.CharacterManager;
 import com.example.character.CharacterSpecification;
+import com.example.cloud.CloudProvider;
+import com.example.cloud.GitHubWorkflowBridge;
+import com.example.cloud.HuggingFaceBridge;
+import com.example.engine.GLTFImporter;
 import com.example.engine.Material;
 import com.example.engine.SceneObject;
 import com.example.engine.ThreeDEngine;
 import com.example.export.GLTFExporter;
+import com.example.runtime.ProjectRuntime;
 import com.example.utils.VynaraLogger;
 import com.example.utils.VynaraLogger.LogLevel;
 import com.example.validation.ValidationManager;
 import com.example.validation.ValidationResult;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class ToolExecutor {
     private final ThreeDEngine engine;
@@ -256,6 +269,205 @@ public class ToolExecutor {
                 }
                 VynaraLogger.e("animation.create_clip FAILED: Target character or player reference null.");
                 return false;
+            }
+
+            case "blender.cloud_generate": {
+                String prompt = op.getStringParam("prompt", "3D asset");
+                String bpyScript = op.getStringParam("bpyScript", "");
+                String assetId = op.getStringParam("assetId", "asset_" + System.currentTimeMillis());
+
+                VynaraLogger.system("Executing blender.cloud_generate: assetId=" + assetId + ", prompt=" + prompt);
+
+                ApiKeyManager keyManager = ProjectRuntime.getInstance().getAIOrchestrator().getApiKeyManager();
+                CloudProvider provider = keyManager.getComputeProvider();
+
+                if (provider == CloudProvider.LOCAL || !provider.isCloud()) {
+                    VynaraLogger.e("blender.cloud_generate FAILED: No cloud compute provider configured in Settings.");
+                    return false;
+                }
+
+                File outputGlb = new File(ProjectRuntime.getInstance().getContext().getFilesDir(), "models_cache/" + assetId + ".glb");
+                final CountDownLatch latch = new CountDownLatch(1);
+                final AtomicBoolean success = new AtomicBoolean(false);
+
+                if (provider == CloudProvider.HUGGING_FACE && keyManager.hasHuggingFaceConfig()) {
+                    HuggingFaceBridge hfBridge = new HuggingFaceBridge();
+                    hfBridge.generateAsset(keyManager.getHuggingFaceSpaceUrl(), keyManager.getHuggingFaceToken(), bpyScript, outputGlb, new HuggingFaceBridge.GenerationCallback() {
+                        @Override
+                        public void onProgress(int percentage, long bytesRead, long totalBytes) {
+                            VynaraLogger.ai("Hugging Face download progress: " + percentage + "%");
+                        }
+
+                        @Override
+                        public void onSuccess(File downloadedGlbFile) {
+                            try {
+                                GLTFImporter.ImportResult result = GLTFImporter.loadFromFile(downloadedGlbFile);
+                                for (SceneObject obj : result.getSceneObjects()) {
+                                    engine.getSceneManager().getActiveScene().addObject(obj);
+                                }
+                                for (Character ch : result.getCharacters()) {
+                                    characterManager.registerCharacter(ch);
+                                    engine.getSceneManager().getActiveScene().addObject(new SceneObject(ch.getName(), ch.getMesh()));
+                                }
+                                engine.getSceneManager().updateWorldTransforms();
+                                success.set(true);
+                            } catch (Exception ex) {
+                                VynaraLogger.e("Failed to import generated GLB into active scene", ex);
+                            } finally {
+                                latch.countDown();
+                            }
+                        }
+
+                        @Override
+                        public void onError(String errorMessage) {
+                            VynaraLogger.e("Hugging Face worker error: " + errorMessage);
+                            latch.countDown();
+                        }
+                    });
+                } else if (provider == CloudProvider.GITHUB_ACTIONS && keyManager.hasGitHubConfig()) {
+                    GitHubWorkflowBridge ghBridge = new GitHubWorkflowBridge();
+                    ghBridge.dispatchGenerationWorkflow(keyManager.getGitHubRepo(), keyManager.getGitHubPat(), keyManager.getGitHubEvent(), assetId, bpyScript, new GitHubWorkflowBridge.WorkflowDispatchCallback() {
+                        @Override
+                        public void onDispatched(String eventType, String aId) {
+                            VynaraLogger.system("GitHub generation workflow dispatched. Awaiting artifact...");
+                            success.set(true);
+                            latch.countDown();
+                        }
+
+                        @Override
+                        public void onError(String errorMessage) {
+                            VynaraLogger.e("GitHub workflow dispatch failed: " + errorMessage);
+                            latch.countDown();
+                        }
+                    });
+                }
+
+                try {
+                    latch.await(60, TimeUnit.SECONDS);
+                } catch (InterruptedException ignored) {}
+
+                return success.get();
+            }
+
+            case "rig.auto_rig_cloud": {
+                String objId = op.getStringParam("objectId", null);
+                String rigType = op.getStringParam("rigType", "humanoid");
+                SceneObject target = findTargetObject(objId);
+
+                if (target == null) {
+                    VynaraLogger.e("rig.auto_rig_cloud FAILED: Target mesh object not found.");
+                    return false;
+                }
+
+                VynaraLogger.system("Executing rig.auto_rig_cloud for object: " + target.getId());
+                ApiKeyManager keyManager = ProjectRuntime.getInstance().getAIOrchestrator().getApiKeyManager();
+                if (!keyManager.hasHuggingFaceConfig() && !keyManager.hasGitHubConfig()) {
+                    VynaraLogger.e("rig.auto_rig_cloud FAILED: Cloud credentials missing in Settings.");
+                    return false;
+                }
+
+                final CountDownLatch latch = new CountDownLatch(1);
+                final AtomicBoolean success = new AtomicBoolean(false);
+
+                try {
+                    File tempMeshFile = new File(ProjectRuntime.getInstance().getContext().getCacheDir(), "export_" + target.getId() + ".gltf");
+                    String gltfContent = GLTFExporter.exportSceneToGLTFJson(engine.getSceneManager().getActiveScene());
+                    try (FileOutputStream fos = new FileOutputStream(tempMeshFile)) {
+                        fos.write(gltfContent.getBytes(StandardCharsets.UTF_8));
+                    }
+
+                    File riggedOutput = new File(ProjectRuntime.getInstance().getContext().getFilesDir(), "models_cache/rigged_" + target.getId() + ".glb");
+                    HuggingFaceBridge hfBridge = new HuggingFaceBridge();
+                    hfBridge.autoRigMesh(keyManager.getHuggingFaceSpaceUrl(), keyManager.getHuggingFaceToken(), tempMeshFile, rigType, riggedOutput, new HuggingFaceBridge.GenerationCallback() {
+                        @Override
+                        public void onProgress(int percentage, long bytesRead, long totalBytes) {}
+
+                        @Override
+                        public void onSuccess(File downloadedGlbFile) {
+                            try {
+                                GLTFImporter.ImportResult result = GLTFImporter.loadFromFile(downloadedGlbFile);
+                                if (!result.getCharacters().isEmpty()) {
+                                    Character riggedChar = result.getCharacters().get(0);
+                                    characterManager.registerCharacter(riggedChar);
+                                    engine.getSceneManager().getActiveScene().removeObject(target.getId());
+                                    engine.getSceneManager().getActiveScene().addObject(new SceneObject(riggedChar.getName(), riggedChar.getMesh()));
+                                    engine.getSceneManager().updateWorldTransforms();
+                                    success.set(true);
+                                }
+                            } catch (Exception ex) {
+                                VynaraLogger.e("Failed to parse auto-rigged GLB", ex);
+                            } finally {
+                                latch.countDown();
+                            }
+                        }
+
+                        @Override
+                        public void onError(String errorMessage) {
+                            VynaraLogger.e("Auto-rigging worker failed: " + errorMessage);
+                            latch.countDown();
+                        }
+                    });
+
+                    latch.await(90, TimeUnit.SECONDS);
+                } catch (Exception e) {
+                    VynaraLogger.e("Auto-rigging process error", e);
+                }
+
+                return success.get();
+            }
+
+            case "asset.fetch_and_spawn": {
+                String assetId = op.getStringParam("assetId", "model_" + System.currentTimeMillis());
+                String url = op.getStringParam("url", "");
+                float px = op.getFloatParam("posX", 0f);
+                float py = op.getFloatParam("posY", 0f);
+                float pz = op.getFloatParam("posZ", 0f);
+
+                VynaraLogger.execution("Executing asset.fetch_and_spawn: assetId=" + assetId);
+                AssetManager assetManager = ProjectRuntime.getInstance().getAssetManager();
+
+                final CountDownLatch latch = new CountDownLatch(1);
+                final AtomicBoolean success = new AtomicBoolean(false);
+
+                assetManager.fetchAssetOnDemand(ProjectRuntime.getInstance().getContext(), assetId, url, new AssetManager.OnAssetReadyListener() {
+                    @Override
+                    public void onProgress(int percentage) {}
+
+                    @Override
+                    public void onSuccess(File assetFile) {
+                        try {
+                            GLTFImporter.ImportResult result = GLTFImporter.loadFromFile(assetFile);
+                            for (SceneObject obj : result.getSceneObjects()) {
+                                obj.getTransform().setPosition(px, py, pz);
+                                engine.getSceneManager().getActiveScene().addObject(obj);
+                            }
+                            for (Character ch : result.getCharacters()) {
+                                characterManager.registerCharacter(ch);
+                                SceneObject charObj = new SceneObject(ch.getName(), ch.getMesh());
+                                charObj.getTransform().setPosition(px, py, pz);
+                                engine.getSceneManager().getActiveScene().addObject(charObj);
+                            }
+                            engine.getSceneManager().updateWorldTransforms();
+                            success.set(true);
+                        } catch (Exception ex) {
+                            VynaraLogger.e("Failed to inject downloaded asset into scene", ex);
+                        } finally {
+                            latch.countDown();
+                        }
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        VynaraLogger.e("Asset download failed: " + message);
+                        latch.countDown();
+                    }
+                });
+
+                try {
+                    latch.await(45, TimeUnit.SECONDS);
+                } catch (InterruptedException ignored) {}
+
+                return success.get();
             }
 
             case "scene.add_light": {
