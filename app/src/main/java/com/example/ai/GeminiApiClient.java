@@ -23,6 +23,17 @@ public class GeminiApiClient {
     private static final String BASE_URL = "https://generativelanguage.googleapis.com/v1beta/";
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
+    private static final String BLENDER_SYSTEM_INSTRUCTION =
+            "You are an expert 3D modeling and rigging engineer using Blender's Python API (`bpy`).\n" +
+            "When given a creation prompt, generate ONLY executable, production-grade Python code for Blender.\n" +
+            "Requirements:\n" +
+            "1. Start with `import bpy, math, sys, os`.\n" +
+            "2. Always clear existing objects: `bpy.ops.object.select_all(action='SELECT')` and `bpy.ops.object.delete()`.\n" +
+            "3. Generate requested geometry, modifiers (subdivision, bevel, boolean, mirror), materials (Principled BSDF), and armatures.\n" +
+            "4. Read the target export path from command-line arguments: `output_path = sys.argv[-1] if len(sys.argv) > 1 and sys.argv[-1].endswith('.glb') else 'output.glb'`.\n" +
+            "5. Ensure output directory exists and export to standard GLB: `bpy.ops.export_scene.gltf(filepath=output_path, export_format='GLB', export_skins=True, export_animations=True)`.\n" +
+            "6. Output ONLY raw Python code without extra conversational commentary.";
+
     private final OkHttpClient client;
     private final Handler mainHandler;
 
@@ -124,6 +135,24 @@ public class GeminiApiClient {
      */
     public void generateStructuredJson(String apiKey, String modelId, String systemInstruction, String userPrompt, final ApiCallback<String> callback) {
         generateContentInternal(apiKey, modelId, systemInstruction, userPrompt, true, callback);
+    }
+
+    /**
+     * Generates executable Blender Python (bpy) scripts for cloud workers.
+     */
+    public void generateBlenderScript(String apiKey, String modelId, String userPrompt, final ApiCallback<String> callback) {
+        generateContentInternal(apiKey, modelId, BLENDER_SYSTEM_INSTRUCTION, userPrompt, false, new ApiCallback<String>() {
+            @Override
+            public void onSuccess(String result) {
+                String cleanedScript = cleanPythonOutput(result);
+                callback.onSuccess(cleanedScript);
+            }
+
+            @Override
+            public void onError(String errorMessage) {
+                callback.onError(errorMessage);
+            }
+        });
     }
 
     private void generateContentInternal(String apiKey, String modelId, String systemInstruction, String userPrompt, boolean enforceJson, final ApiCallback<String> callback) {
@@ -241,6 +270,20 @@ public class GeminiApiClient {
         String trimmed = input.trim();
         if (trimmed.startsWith("```json")) {
             trimmed = trimmed.substring(7);
+        } else if (trimmed.startsWith("```")) {
+            trimmed = trimmed.substring(3);
+        }
+        if (trimmed.endsWith("```")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 3);
+        }
+        return trimmed.trim();
+    }
+
+    private String cleanPythonOutput(String input) {
+        if (input == null) return "";
+        String trimmed = input.trim();
+        if (trimmed.startsWith("```python")) {
+            trimmed = trimmed.substring(9);
         } else if (trimmed.startsWith("```")) {
             trimmed = trimmed.substring(3);
         }
