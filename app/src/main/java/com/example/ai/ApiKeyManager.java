@@ -6,10 +6,20 @@ import android.content.SharedPreferences;
 import androidx.security.crypto.EncryptedSharedPreferences;
 import androidx.security.crypto.MasterKeys;
 
+import com.example.cloud.CloudProvider;
+
 public class ApiKeyManager {
     private static final String PREF_NAME = "vynara_secure_prefs";
     private static final String KEY_GEMINI_API_KEY = "gemini_api_key";
     private static final String KEY_SELECTED_MODEL = "selected_gemini_model";
+
+    // Cloud Worker MCP Configuration Keys
+    private static final String KEY_COMPUTE_PROVIDER = "compute_provider";
+    private static final String KEY_GITHUB_REPO = "github_repo";
+    private static final String KEY_GITHUB_PAT = "github_pat";
+    private static final String KEY_GITHUB_EVENT = "github_event";
+    private static final String KEY_HF_SPACE_URL = "hf_space_url";
+    private static final String KEY_HF_TOKEN = "hf_token";
 
     private SharedPreferences prefs;
 
@@ -67,5 +77,105 @@ public class ApiKeyManager {
 
     public void clearApiKey() {
         prefs.edit().remove(KEY_GEMINI_API_KEY).apply();
+    }
+
+    // ==========================================
+    // Cloud Worker MCP Configuration Methods
+    // ==========================================
+
+    public void saveComputeProvider(CloudProvider provider) {
+        if (provider != null) {
+            prefs.edit().putString(KEY_COMPUTE_PROVIDER, provider.getId()).apply();
+        }
+    }
+
+    public CloudProvider getComputeProvider() {
+        String providerId = prefs.getString(KEY_COMPUTE_PROVIDER, CloudProvider.LOCAL.getId());
+        return CloudProvider.fromId(providerId);
+    }
+
+    public void saveGitHubConfig(String repo, String pat, String eventName) {
+        SharedPreferences.Editor editor = prefs.edit();
+        if (repo != null) {
+            editor.putString(KEY_GITHUB_REPO, repo.trim());
+        }
+        if (pat != null) {
+            editor.putString(KEY_GITHUB_PAT, pat.trim());
+        }
+        if (eventName != null && !eventName.trim().isEmpty()) {
+            editor.putString(KEY_GITHUB_EVENT, eventName.trim());
+        } else {
+            editor.putString(KEY_GITHUB_EVENT, "vynara_generate");
+        }
+        editor.apply();
+    }
+
+    public String getGitHubRepo() {
+        return prefs.getString(KEY_GITHUB_REPO, "");
+    }
+
+    public String getGitHubPat() {
+        return prefs.getString(KEY_GITHUB_PAT, "");
+    }
+
+    public String getGitHubEvent() {
+        return prefs.getString(KEY_GITHUB_EVENT, "vynara_generate");
+    }
+
+    public boolean hasGitHubConfig() {
+        String repo = getGitHubRepo();
+        String pat = getGitHubPat();
+        return repo != null && !repo.trim().isEmpty() && pat != null && !pat.trim().isEmpty();
+    }
+
+    public String getMaskedGitHubPat() {
+        String token = getGitHubPat();
+        if (token == null || token.length() < 8) {
+            return "••••••••••••••••";
+        }
+        return token.substring(0, 4) + "••••••••••••" + token.substring(token.length() - 3);
+    }
+
+    public void saveHuggingFaceConfig(String spaceUrl, String token) {
+        SharedPreferences.Editor editor = prefs.edit();
+        if (spaceUrl != null) {
+            editor.putString(KEY_HF_SPACE_URL, spaceUrl.trim());
+        }
+        if (token != null) {
+            editor.putString(KEY_HF_TOKEN, token.trim());
+        }
+        editor.apply();
+    }
+
+    public String getHuggingFaceSpaceUrl() {
+        return prefs.getString(KEY_HF_SPACE_URL, "");
+    }
+
+    public String getHuggingFaceToken() {
+        return prefs.getString(KEY_HF_TOKEN, "");
+    }
+
+    public boolean hasHuggingFaceConfig() {
+        String url = getHuggingFaceSpaceUrl();
+        return url != null && !url.trim().isEmpty();
+    }
+
+    public String getMaskedHuggingFaceToken() {
+        String token = getHuggingFaceToken();
+        if (token == null || token.length() < 8) {
+            return "••••••••••••••••";
+        }
+        return token.substring(0, 4) + "••••••••••••" + token.substring(token.length() - 3);
+    }
+
+    public void clearCloudConfig() {
+        prefs.edit()
+                .remove(KEY_COMPUTE_PROVIDER)
+                .remove(KEY_GITHUB_REPO)
+                .remove(KEY_GITHUB_PAT)
+                .remove(KEY_GITHUB_EVENT)
+                .remove(KEY_HF_SPACE_URL)
+                .remove(KEY_HF_TOKEN)
+                .apply();
     }
 }
