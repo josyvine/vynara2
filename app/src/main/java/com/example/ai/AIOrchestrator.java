@@ -2,6 +2,7 @@ package com.example.ai;
 
 import com.example.ai.protocol.AIProductionPlan;
 import com.example.ai.protocol.AIProductionRequest;
+import com.example.cloud.CloudProvider;
 import com.example.knowledge.KnowledgeEntry;
 import com.example.knowledge.KnowledgeManager;
 import com.example.tasks.ProductionPlan;
@@ -85,13 +86,17 @@ public class AIOrchestrator {
             }
         }
 
+        CloudProvider activeProvider = apiKeyManager.getComputeProvider();
+        String providerContext = "ACTIVE COMPUTE PIPELINE: " + activeProvider.getDisplayName() + "\n";
+
         String systemInstruction = "You are Vynara Autonomous 3D AI Artist, acting as the creative director and technical planner.\n" +
                 "KNOWLEDGE vs. CAPABILITY vs. TOOL vs. TASK CONTRACT:\n" +
                 "- Knowledge describes construction rules and facts. Capabilities describe what the system knows how to do.\n" +
                 "- Tools are the ONLY executable operations. Tasks are concrete operations in the production plan.\n" +
                 "- You may reason using knowledge and capabilities, but you may execute ONLY registered tools.\n" +
-                "- Do NOT use primitive placeholders like cubes for complex objects; utilize the blueprints to build procedural assemblies.\n" +
+                "- When Cloud Workers (GitHub Actions / Hugging Face) are enabled, prefer remote high-fidelity tools like `blender.cloud_generate` or `rig.auto_rig_cloud` for complex geometries and character rigging.\n" +
                 "- Choose your commands strictly from the provided Authoritative Registered Commands manifest. Never invent Tool IDs.\n\n" +
+                providerContext + "\n" +
                 toolManifestBuilder.toString() + "\n\n" +
                 "RETURN A STRICT JSON OBJECT REPRESENTING THE PRODUCTION PLAN.\n" +
                 "REQUIRED JSON SCHEMA:\n" +
@@ -138,6 +143,31 @@ public class AIOrchestrator {
             public void onError(String errorMessage) {
                 VynaraLogger.e("Gemini API connection error callback fired: " + errorMessage);
                 callback.onError("Gemini API connection error: " + errorMessage);
+            }
+        });
+    }
+
+    /**
+     * Direct Blender Python script generation for cloud runners.
+     */
+    public void planBlenderProduction(String prompt, final GeminiApiClient.ApiCallback<String> callback) {
+        if (!apiKeyManager.hasApiKey()) {
+            callback.onError("Gemini API key missing. Please configure it in Settings.");
+            return;
+        }
+
+        VynaraLogger.system("Generating Blender Python execution script via Gemini...");
+        apiClient.generateBlenderScript(apiKeyManager.getApiKey(), apiKeyManager.getSelectedModel(), prompt, new GeminiApiClient.ApiCallback<String>() {
+            @Override
+            public void onSuccess(String bpyScript) {
+                VynaraLogger.gemini("Blender script generated successfully (" + bpyScript.length() + " chars)");
+                callback.onSuccess(bpyScript);
+            }
+
+            @Override
+            public void onError(String errorMessage) {
+                VynaraLogger.e("Failed to generate Blender script: " + errorMessage);
+                callback.onError(errorMessage);
             }
         });
     }
