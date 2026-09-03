@@ -96,6 +96,27 @@ public class ToolRegistry {
                 .addParam("characterId", "STRING", true, "Target character ID")
                 .addParam("clipName", "STRING", true, "walk, run, idle, crouch, fly, wave"));
 
+        // Cloud Compute & Blender MCP
+        register(new ToolDefinition("blender.cloud_generate", "Cloud Blender Generator", "CLOUD",
+                "Executes a Blender Python (bpy) script on a persistent cloud runner (GitHub Actions / Hugging Face) and streams GLB.", ToolDefinition.AvailabilityState.AVAILABLE)
+                .addParam("prompt", "STRING", true, "Description of 3D asset to generate")
+                .addParam("bpyScript", "STRING", false, "Generated Blender Python script")
+                .addParam("assetId", "STRING", false, "Target asset identifier"));
+
+        register(new ToolDefinition("rig.auto_rig_cloud", "Cloud Auto-Rigging Engine", "CLOUD",
+                "Uploads a static 3D mesh to cloud Blender to generate a Rigify humanoid skeleton and automatic skin weights.", ToolDefinition.AvailabilityState.AVAILABLE)
+                .addParam("objectId", "STRING", true, "Target mesh object ID")
+                .addParam("rigType", "STRING", false, "humanoid, quadruped, bird"));
+
+        // Asset On-Demand Streaming
+        register(new ToolDefinition("asset.fetch_and_spawn", "Fetch & Spawn Remote Asset", "ASSET",
+                "Downloads on-demand GLB asset from cloud/CDN, caches locally, and instantiates into scene.", ToolDefinition.AvailabilityState.AVAILABLE)
+                .addParam("assetId", "STRING", true, "Unique asset ID or catalog name")
+                .addParam("url", "STRING", false, "Direct download URL for GLB file")
+                .addParam("posX", "FLOAT", false, "X position")
+                .addParam("posY", "FLOAT", false, "Y position")
+                .addParam("posZ", "FLOAT", false, "Z position"));
+
         // Lighting & Viewport Camera
         register(new ToolDefinition("scene.add_light", "Add Light Source", "LIGHTING",
                 "Adds directional, point, or spot light to active scene.", ToolDefinition.AvailabilityState.AVAILABLE)
