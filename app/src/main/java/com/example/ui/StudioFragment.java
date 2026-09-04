@@ -3,6 +3,7 @@ package com.example.ui;
 import android.opengl.GLSurfaceView;
 import android.os.Bundle;
 import android.view.LayoutInflater;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageButton;
@@ -78,6 +79,9 @@ public class StudioFragment extends Fragment {
         renderer = new StudioGLRenderer(engine.getSceneManager(), engine.getCameraManager(), engine.getLightManager());
         glSurfaceView.setRenderer(renderer);
         glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
+
+        // Enable 360-degree Touch Viewport Camera Orbit Navigation
+        setupViewportTouchOrbitGesture();
 
         updateStudioStatsUI();
 
@@ -262,6 +266,51 @@ public class StudioFragment extends Fragment {
                 dialog.show(getChildFragmentManager(), "AiAssistantDialog");
             });
         }
+    }
+
+    /**
+     * Touch Event Handler: Translates touch drag physics on the 3D surface view directly into camera orbit rotation.
+     */
+    private void setupViewportTouchOrbitGesture() {
+        if (glSurfaceView == null) return;
+
+        glSurfaceView.setOnTouchListener(new View.OnTouchListener() {
+            private float previousTouchX;
+            private float previousTouchY;
+
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                if (event == null) return false;
+
+                float x = event.getX();
+                float y = event.getY();
+
+                switch (event.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        previousTouchX = x;
+                        previousTouchY = y;
+                        v.performClick();
+                        return true;
+
+                    case MotionEvent.ACTION_MOVE:
+                        float deltaX = x - previousTouchX;
+                        float deltaY = y - previousTouchY;
+
+                        if (engine != null && engine.getCameraManager() != null) {
+                            com.example.engine.Camera camera = engine.getCameraManager().getActiveCamera();
+                            if (camera != null) {
+                                float sensitivity = 0.35f;
+                                camera.orbit(deltaX * sensitivity, -deltaY * sensitivity);
+                            }
+                        }
+
+                        previousTouchX = x;
+                        previousTouchY = y;
+                        return true;
+                }
+                return false;
+            }
+        });
     }
 
     public void loadAndDisplayGLBFile(File glbFile) {
