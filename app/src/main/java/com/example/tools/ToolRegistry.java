@@ -59,7 +59,7 @@ public class ToolRegistry {
                 "Duplicates target node and sub-mesh tree.", ToolDefinition.AvailabilityState.AVAILABLE)
                 .addParam("objectId", "STRING", false, "Target object ID"));
 
-        // PBR Material Shading
+        // PBR Material Shading & Aliases
         register(new ToolDefinition("material.set_properties", "Set Material Properties", "MATERIAL",
                 "Sets PBR color, metallic, roughness, and opacity of object material.", ToolDefinition.AvailabilityState.AVAILABLE)
                 .addParam("objectId", "STRING", true, "Target object ID")
@@ -67,6 +67,14 @@ public class ToolRegistry {
                 .addParam("metallic", "FLOAT", false, "Metallic factor 0.0 to 1.0")
                 .addParam("roughness", "FLOAT", false, "Roughness factor 0.0 to 1.0")
                 .addParam("opacity", "FLOAT", false, "Opacity factor 0.0 to 1.0"));
+
+        register(new ToolDefinition("material.apply", "Apply Material", "MATERIAL",
+                "Applies material properties to scene node.", ToolDefinition.AvailabilityState.AVAILABLE)
+                .addParam("objectId", "STRING", false, "Target object ID")
+                .addParam("materialId", "STRING", false, "Material ID"));
+
+        register(new ToolDefinition("material.create", "Create Material", "MATERIAL",
+                "Creates a new material definition.", ToolDefinition.AvailabilityState.AVAILABLE));
 
         // Characters & Creatures
         register(new ToolDefinition("character.create_humanoid", "Create Humanoid Character", "CHARACTER",
@@ -103,6 +111,11 @@ public class ToolRegistry {
                 .addParam("bpyScript", "STRING", false, "Generated Blender Python script")
                 .addParam("assetId", "STRING", false, "Target asset identifier"));
 
+        register(new ToolDefinition("blender.generate", "Blender Generator Alias", "CLOUD",
+                "Alias for blender.cloud_generate.", ToolDefinition.AvailabilityState.AVAILABLE)
+                .addParam("prompt", "STRING", false, "Description of 3D asset to generate")
+                .addParam("bpyScript", "STRING", false, "Generated Blender Python script"));
+
         register(new ToolDefinition("rig.auto_rig_cloud", "Cloud Auto-Rigging Engine", "CLOUD",
                 "Uploads a static 3D mesh to cloud Blender to generate a Rigify humanoid skeleton and automatic skin weights.", ToolDefinition.AvailabilityState.AVAILABLE)
                 .addParam("objectId", "STRING", true, "Target mesh object ID")
@@ -133,6 +146,12 @@ public class ToolRegistry {
                 .addParam("targetY", "FLOAT", false, "Look target Y")
                 .addParam("targetZ", "FLOAT", false, "Look target Z"));
 
+        register(new ToolDefinition("scene.clear", "Clear Scene", "GEOMETRY",
+                "Clears all objects from current active scene graph.", ToolDefinition.AvailabilityState.AVAILABLE));
+
+        register(new ToolDefinition("scene.add_node", "Add Node to Scene", "GEOMETRY",
+                "Adds a node to the active scene graph.", ToolDefinition.AvailabilityState.AVAILABLE));
+
         // Transactions
         register(new ToolDefinition("transaction.undo", "Undo Transaction", "TRANSACTION",
                 "Reverts the last scene operation.", ToolDefinition.AvailabilityState.AVAILABLE));
@@ -150,7 +169,16 @@ public class ToolRegistry {
                 .addParam("filename", "STRING", false, "Export filename"));
 
         register(new ToolDefinition("project.save", "Save Project to Disk", "STORAGE",
-                "Persists active scene graph and assets to local storage.", ToolDefinition.AvailabilityState.AVAILABLE));
+                "Persists active scene graph and assets to local storage.", ToolDefinition.AvailabilityState.AVAILABLE)
+                .addParam("projectId", "STRING", false, "Project identifier"));
+
+        register(new ToolDefinition("project.load", "Load Project from Disk", "STORAGE",
+                "Loads project state from local storage.", ToolDefinition.AvailabilityState.AVAILABLE)
+                .addParam("projectId", "STRING", false, "Project identifier"));
+
+        register(new ToolDefinition("project.create", "Create New Project", "STORAGE",
+                "Initializes a new empty project.", ToolDefinition.AvailabilityState.AVAILABLE)
+                .addParam("name", "STRING", false, "Project name"));
     }
 
     public void register(ToolDefinition tool) {
