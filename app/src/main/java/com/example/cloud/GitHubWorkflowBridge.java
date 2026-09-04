@@ -14,6 +14,9 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.text.SimpleDateFormat;
+import java.util.Locale;
+import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -32,7 +35,7 @@ public class GitHubWorkflowBridge {
     private static final int DEFAULT_TIMEOUT_SECONDS = 60;
     private static final long POLLING_INTERVAL_MS = 5000; // 5 seconds interval
     private static final long MAX_POLLING_DURATION_MS = 300000; // 5 minutes timeout
-    private static final int MAX_ARTIFACT_RETRY_ATTEMPTS = 12; // 12 retries (36s total window for GitHub indexing)
+    private static final int MAX_ARTIFACT_RETRY_ATTEMPTS = 16; // 16 retries (48s window for GitHub artifact indexing)
     private static final long ARTIFACT_RETRY_DELAY_MS = 3000; // 3 seconds between artifact retries
 
     private final OkHttpClient httpClient;
@@ -290,14 +293,14 @@ public class GitHubWorkflowBridge {
             return;
         }
 
-        long startTime = System.currentTimeMillis();
+        final long dispatchTimeMs = System.currentTimeMillis();
         VynaraLogger.system("GitHubWorkflowBridge: Starting workflow execution monitoring for assetId: " + assetId);
 
         final Runnable[] pollRunnable = new Runnable[1];
         pollRunnable[0] = new Runnable() {
             @Override
             public void run() {
-                if (System.currentTimeMillis() - startTime > MAX_POLLING_DURATION_MS) {
+                if (System.currentTimeMillis() - dispatchTimeMs > MAX_POLLING_DURATION_MS) {
                     VynaraLogger.e("GitHubWorkflowBridge: Workflow execution timed out after " + (MAX_POLLING_DURATION_MS / 1000) + "s");
                     mainHandler.post(() -> callback.onError("GitHub Actions workflow execution timed out."));
                     return;
@@ -334,28 +337,55 @@ public class GitHubWorkflowBridge {
                             JSONArray runs = root.optJSONArray("workflow_runs");
 
                             if (runs != null && runs.length() > 0) {
-                                JSONObject latestRun = runs.getJSONObject(0);
-                                String status = latestRun.optString("status", "unknown");
-                                String conclusion = latestRun.optString("conclusion", "null");
-                                long runId = latestRun.optLong("id", 0);
+                                JSONObject targetRun = null;
 
-                                VynaraLogger.system("GitHubWorkflowBridge: Run #" + runId + " Status: " + status + " Conclusion: " + conclusion);
-                                mainHandler.post(() -> callback.onStatusUpdate(status, "Run #" + runId + " [" + status + "]"));
+                                // Filter runs to strictly find the one triggered for THIS dispatch
+                                SimpleDateFormat isoFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US);
+                                isoFormat.setTimeZone(TimeZone.getTimeZone("UTC"));
 
-                                if ("completed".equalsIgnoreCase(status)) {
-                                    if ("success".equalsIgnoreCase(conclusion)) {
-                                        VynaraLogger.system("GitHubWorkflowBridge: Workflow run #" + runId + " succeeded! Waiting for artifact indexing...");
-                                        mainHandler.post(() -> callback.onStatusUpdate("downloading", "Downloading GLB artifact..."));
+                                for (int i = 0; i < runs.length(); i++) {
+                                    JSONObject r = runs.getJSONObject(i);
+                                    String createdAtStr = r.optString("created_at", "");
+                                    long runCreatedAtMs = 0;
+                                    try {
+                                        if (!createdAtStr.isEmpty()) {
+                                            runCreatedAtMs = isoFormat.parse(createdAtStr).getTime();
+                                        }
+                                    } catch (Exception ignored) {}
 
-                                        // Start retry polling loop to allow GitHub API artifact indexing to complete
-                                        pollAndDownloadArtifact(repository, personalAccessToken, assetId, destinationFile, callback, 1, MAX_ARTIFACT_RETRY_ATTEMPTS);
-                                        return;
-                                    } else {
-                                        String failureMsg = "GitHub Workflow Run #" + runId + " failed with conclusion: " + conclusion;
-                                        VynaraLogger.e(failureMsg);
-                                        mainHandler.post(() -> callback.onError(failureMsg));
-                                        return;
+                                    // Accept runs created around or after dispatch time (with 15s clock tolerance)
+                                    if (runCreatedAtMs >= (dispatchTimeMs - 15000)) {
+                                        targetRun = r;
+                                        break;
                                     }
+                                }
+
+                                if (targetRun != null) {
+                                    String status = targetRun.optString("status", "unknown");
+                                    String conclusion = targetRun.optString("conclusion", "null");
+                                    long runId = targetRun.optLong("id", 0);
+
+                                    VynaraLogger.system("GitHubWorkflowBridge: Active Run #" + runId + " Status: " + status + " Conclusion: " + conclusion);
+                                    mainHandler.post(() -> callback.onStatusUpdate(status, "Run #" + runId + " [" + status + "]"));
+
+                                    if ("completed".equalsIgnoreCase(status)) {
+                                        if ("success".equalsIgnoreCase(conclusion)) {
+                                            VynaraLogger.system("GitHubWorkflowBridge: Workflow run #" + runId + " succeeded! Waiting for artifact indexing...");
+                                            mainHandler.post(() -> callback.onStatusUpdate("downloading", "Downloading GLB artifact..."));
+
+                                            // Start retry polling loop to allow GitHub API artifact indexing to complete
+                                            pollAndDownloadArtifact(repository, personalAccessToken, assetId, destinationFile, callback, 1, MAX_ARTIFACT_RETRY_ATTEMPTS);
+                                            return;
+                                        } else {
+                                            String failureMsg = "GitHub Workflow Run #" + runId + " failed with conclusion: " + conclusion;
+                                            VynaraLogger.e(failureMsg);
+                                            mainHandler.post(() -> callback.onError(failureMsg));
+                                            return;
+                                        }
+                                    }
+                                } else {
+                                    VynaraLogger.system("GitHubWorkflowBridge: Waiting for new workflow run to be queued by GitHub Actions...");
+                                    mainHandler.post(() -> callback.onStatusUpdate("queued", "Waiting for worker to start..."));
                                 }
                             }
 
