@@ -279,7 +279,9 @@ public class StudioFragment extends Fragment {
 
             for (Character ch : result.getCharacters()) {
                 runtime.getCharacterManager().registerCharacter(ch);
-                engine.getSceneManager().getActiveScene().addObject(new SceneObject(ch.getName(), ch.getMesh()));
+                if (ch.getRootObject() != null) {
+                    engine.getSceneManager().getActiveScene().addObject(ch.getRootObject());
+                }
             }
 
             engine.getSceneManager().updateWorldTransforms();
