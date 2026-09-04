@@ -291,7 +291,8 @@ public class GitHubWorkflowBridge {
         long startTime = System.currentTimeMillis();
         VynaraLogger.system("GitHubWorkflowBridge: Starting workflow execution monitoring for assetId: " + assetId);
 
-        Runnable pollRunnable = new Runnable() {
+        final Runnable[] pollRunnable = new Runnable[1];
+        pollRunnable[0] = new Runnable() {
             @Override
             public void run() {
                 if (System.currentTimeMillis() - startTime > MAX_POLLING_DURATION_MS) {
@@ -314,7 +315,7 @@ public class GitHubWorkflowBridge {
                     @Override
                     public void onFailure(Call call, IOException e) {
                         VynaraLogger.e("Workflow status check failed: " + e.getMessage());
-                        mainHandler.postDelayed(pollRunnable, POLLING_INTERVAL_MS);
+                        mainHandler.postDelayed(pollRunnable[0], POLLING_INTERVAL_MS);
                     }
 
                     @Override
@@ -322,7 +323,7 @@ public class GitHubWorkflowBridge {
                         try (ResponseBody responseBody = response.body()) {
                             if (!response.isSuccessful() || responseBody == null) {
                                 VynaraLogger.e("Workflow runs query failed: HTTP " + response.code());
-                                mainHandler.postDelayed(pollRunnable, POLLING_INTERVAL_MS);
+                                mainHandler.postDelayed(pollRunnable[0], POLLING_INTERVAL_MS);
                                 return;
                             }
 
@@ -373,18 +374,18 @@ public class GitHubWorkflowBridge {
                             }
 
                             // Still queued or in progress, schedule next poll
-                            mainHandler.postDelayed(pollRunnable, POLLING_INTERVAL_MS);
+                            mainHandler.postDelayed(pollRunnable[0], POLLING_INTERVAL_MS);
 
                         } catch (Exception ex) {
                             VynaraLogger.e("Error parsing workflow status: " + ex.getMessage(), ex);
-                            mainHandler.postDelayed(pollRunnable, POLLING_INTERVAL_MS);
+                            mainHandler.postDelayed(pollRunnable[0], POLLING_INTERVAL_MS);
                         }
                     }
                 });
             }
         };
 
-        mainHandler.post(pollRunnable);
+        mainHandler.post(pollRunnable[0]);
     }
 
     private void executeBinaryDownload(String downloadUrl,
