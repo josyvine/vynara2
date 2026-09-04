@@ -25,7 +25,6 @@ import okhttp3.Response;
 import okhttp3.ResponseBody;
 
 public class HuggingFaceBridge {
-    private static final String TAG = "HuggingFaceBridge";
     private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
     private static final MediaType OCTET_STREAM_MEDIA_TYPE = MediaType.parse("application/octet-stream");
     private static final int DEFAULT_TIMEOUT_SECONDS = 90;
@@ -121,12 +120,12 @@ public class HuggingFaceBridge {
                 requestBuilder.header("Authorization", "Bearer " + userToken.trim());
             }
 
-            VynaraLogger.i(TAG, "Sending generation request to Hugging Face: " + targetUrl);
+            VynaraLogger.system("HuggingFaceBridge: Sending generation request to Hugging Face: " + targetUrl);
 
             httpClient.newCall(requestBuilder.build()).enqueue(new Callback() {
                 @Override
                 public void onFailure(Call call, IOException e) {
-                    VynaraLogger.e(TAG, "Generation request failed: " + e.getMessage(), e);
+                    VynaraLogger.e("HuggingFaceBridge: Generation request failed: " + e.getMessage(), e);
                     mainHandler.post(() -> callback.onError("Request error: " + e.getMessage()));
                 }
 
@@ -189,12 +188,12 @@ public class HuggingFaceBridge {
             requestBuilder.header("Authorization", "Bearer " + userToken.trim());
         }
 
-        VynaraLogger.i(TAG, "Dispatching auto-rig task to: " + targetUrl);
+        VynaraLogger.system("HuggingFaceBridge: Dispatching auto-rig task to: " + targetUrl);
 
         httpClient.newCall(requestBuilder.build()).enqueue(new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
-                VynaraLogger.e(TAG, "Auto-rig request failed: " + e.getMessage(), e);
+                VynaraLogger.e("HuggingFaceBridge: Auto-rig request failed: " + e.getMessage(), e);
                 mainHandler.post(() -> callback.onError("Auto-rig request failed: " + e.getMessage()));
             }
 
@@ -251,7 +250,7 @@ public class HuggingFaceBridge {
             }
 
         } catch (Exception ex) {
-            VynaraLogger.e(TAG, "Error writing GLB output stream: " + ex.getMessage(), ex);
+            VynaraLogger.e("HuggingFaceBridge: Error writing GLB output stream: " + ex.getMessage(), ex);
             mainHandler.post(() -> callback.onError("Disk write error: " + ex.getMessage()));
         }
     }
