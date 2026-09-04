@@ -1,14 +1,19 @@
 package com.example;
 
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+import android.widget.Toast;
+
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.fragment.app.Fragment;
 
 import com.example.ai.ApiKeyManager;
 import com.example.cloud.CloudProvider;
+import com.example.cloud.GitHubOAuthService;
 import com.example.runtime.ProjectRuntime;
 import com.example.ui.AssetsFragment;
 import com.example.ui.CreateFragment;
@@ -28,6 +33,7 @@ public class MainActivity extends AppCompatActivity {
 
     private BottomNavigationView bottomNavigationView;
     private ProjectRuntime projectRuntime;
+    private GitHubOAuthService gitHubOAuthService;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -36,6 +42,7 @@ public class MainActivity extends AppCompatActivity {
 
         // Phase 1 Alignment: Initialize unified shared 3D project runtime instance
         projectRuntime = ProjectRuntime.getInstance(getApplicationContext());
+        gitHubOAuthService = new GitHubOAuthService();
 
         bottomNavigationView = findViewById(R.id.bottom_navigation);
 
@@ -84,6 +91,72 @@ public class MainActivity extends AppCompatActivity {
         ApiKeyManager keyManager = projectRuntime.getAIOrchestrator().getApiKeyManager();
         CloudProvider provider = keyManager.getComputeProvider();
         VynaraLogger.system("Vynara engine initialized cleanly. Active compute pipeline: " + provider.getDisplayName());
+
+        // Handle initial intent for OAuth callback if opened via link
+        handleOAuthIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleOAuthIntent(intent);
+    }
+
+    private void handleOAuthIntent(Intent intent) {
+        if (intent == null || intent.getData() == null) return;
+
+        Uri data = intent.getData();
+        if ("vynara".equalsIgnoreCase(data.getScheme()) && "oauth-callback".equalsIgnoreCase(data.getHost())) {
+            String code = data.getQueryParameter("code");
+            String error = data.getQueryParameter("error");
+
+            if (error != null) {
+                String errorDesc = data.getQueryParameter("error_description");
+                VynaraLogger.e("GitHub OAuth denied: " + (errorDesc != null ? errorDesc : error));
+                Toast.makeText(this, "GitHub sign-in failed: " + error, Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            if (code != null && !code.trim().isEmpty()) {
+                VynaraLogger.system("GitHub OAuth code received from browser redirect. Starting token exchange...");
+                ApiKeyManager keyMgr = getProjectRuntime().getAIOrchestrator().getApiKeyManager();
+                String clientId = keyMgr.getGitHubClientId();
+                String clientSecret = keyMgr.getGitHubClientSecret();
+
+                gitHubOAuthService.exchangeCodeForToken(clientId, clientSecret, code, GitHubOAuthService.DEFAULT_REDIRECT_URI, new GitHubOAuthService.OAuthTokenCallback() {
+                    @Override
+                    public void onSuccess(String accessToken, String tokenType, String scope) {
+                        gitHubOAuthService.fetchUserProfile(accessToken, new GitHubOAuthService.UserProfileCallback() {
+                            @Override
+                            public void onSuccess(String login, String name, String avatarUrl) {
+                                keyMgr.saveGitHubUser(login, avatarUrl);
+                                keyMgr.saveGitHubConfig(keyMgr.getGitHubRepo(), accessToken, "vynara_generate");
+                                keyMgr.saveComputeProvider(CloudProvider.GITHUB_ACTIONS);
+
+                                VynaraLogger.system("Authenticated as GitHub user: @" + login);
+                                Toast.makeText(MainActivity.this, "Signed in as @" + login + " successfully!", Toast.LENGTH_LONG).show();
+                                navigateToSettings();
+                            }
+
+                            @Override
+                            public void onError(String errorMessage) {
+                                keyMgr.saveGitHubConfig(keyMgr.getGitHubRepo(), accessToken, "vynara_generate");
+                                keyMgr.saveComputeProvider(CloudProvider.GITHUB_ACTIONS);
+                                Toast.makeText(MainActivity.this, "GitHub connected!", Toast.LENGTH_SHORT).show();
+                                navigateToSettings();
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onError(String errorMessage) {
+                        VynaraLogger.e("GitHub OAuth exchange failed: " + errorMessage);
+                        Toast.makeText(MainActivity.this, "OAuth Exchange Error: " + errorMessage, Toast.LENGTH_LONG).show();
+                    }
+                });
+            }
+        }
     }
 
     public void loadFragment(Fragment fragment) {
@@ -101,6 +174,12 @@ public class MainActivity extends AppCompatActivity {
     public void navigateToStudio() {
         if (bottomNavigationView != null) {
             bottomNavigationView.setSelectedItemId(R.id.nav_studio);
+        }
+    }
+
+    public void navigateToSettings() {
+        if (bottomNavigationView != null) {
+            bottomNavigationView.setSelectedItemId(R.id.nav_settings);
         }
     }
 
