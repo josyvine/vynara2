@@ -62,8 +62,6 @@ public class SettingsFragment extends Fragment {
     private GitHubOAuthService oAuthService;
     private AlertDialog deviceCodeDialog;
 
-    // CRITICAL FIX: Initialize flag as true to block all accidental, system-triggered 
-    // selection events during the initial layout startup passes before live models load.
     private boolean isUpdatingModels = true;
 
     @Nullable
@@ -202,11 +200,7 @@ public class SettingsFragment extends Fragment {
 
             // GitHub OAuth Web Login Trigger
             if (btnGithubLogin != null) {
-                btnGithubLogin.setOnClickListener(v -> {
-                    String authUrl = GitHubOAuthService.buildWebAuthorizeUrl(keyMgr.getGitHubClientId(), GitHubOAuthService.DEFAULT_REDIRECT_URI, "vynara_auth");
-                    Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(authUrl));
-                    startActivity(browserIntent);
-                });
+                btnGithubLogin.setOnClickListener(v -> openGitHubLoginMenu());
             }
 
             // GitHub Device Code Flow Trigger
@@ -216,12 +210,7 @@ public class SettingsFragment extends Fragment {
 
             // GitHub Logout Trigger
             if (btnGithubLogout != null) {
-                btnGithubLogout.setOnClickListener(v -> {
-                    keyMgr.logoutGitHub();
-                    if (etGithubPat != null) etGithubPat.setText("");
-                    updateGitHubAuthUI(keyMgr);
-                    Toast.makeText(getContext(), "Logged out of GitHub", Toast.LENGTH_SHORT).show();
-                });
+                btnGithubLogout.setOnClickListener(v -> showLogoutConfirmationDialog(keyMgr));
             }
 
             // Save & Test buttons for GitHub
@@ -249,7 +238,7 @@ public class SettingsFragment extends Fragment {
                         return;
                     }
                     Toast.makeText(getContext(), "Testing GitHub Actions connection...", Toast.LENGTH_SHORT).show();
-                    new GitHubWorkflowBridge().testConnection(keyMgr.getGitHubRepo(), keyMgr.getGitHubPat(), new GitHubWorkflowBridge.ConnectionTestCallback() {
+                    new GitHubWorkflowBridge().testConnection(getContext(), keyMgr.getGitHubRepo(), new GitHubWorkflowBridge.ConnectionTestCallback() {
                         @Override
                         public void onSuccess(String repoFullName, boolean hasWorkflowAccess) {
                             if (getContext() != null) {
@@ -397,9 +386,13 @@ public class SettingsFragment extends Fragment {
         }
     }
 
-    private void updateGitHubAuthUI(ApiKeyManager keyMgr) {
+    public void updateGitHubAuthUI(ApiKeyManager keyMgr) {
+        if (keyMgr == null && getContext() != null) {
+            keyMgr = new ApiKeyManager(getContext());
+        }
         if (keyMgr == null) return;
-        boolean loggedIn = keyMgr.isGitHubLoggedIn();
+
+        boolean loggedIn = keyMgr.isGitHubLoggedIn() || GitHubOAuthService.isLoggedIn(getContext());
 
         if (layoutGithubLoggedIn != null) {
             layoutGithubLoggedIn.setVisibility(loggedIn ? View.VISIBLE : View.GONE);
@@ -408,97 +401,57 @@ public class SettingsFragment extends Fragment {
             layoutGithubLoggedOut.setVisibility(loggedIn ? View.GONE : View.VISIBLE);
         }
         if (loggedIn && tvGithubUser != null) {
-            tvGithubUser.setText("Signed in as @" + keyMgr.getGitHubUsername());
+            String user = keyMgr.getGitHubUsername();
+            if (user.isEmpty() && getContext() != null) {
+                user = GitHubOAuthService.getUserLogin(getContext());
+            }
+            tvGithubUser.setText("Signed in as @" + (user.isEmpty() ? "GitHub User" : user));
         }
+    }
+
+    private void openGitHubLoginMenu() {
+        if (getParentFragmentManager() != null) {
+            GitHubLoginDialogFragment dialog = new GitHubLoginDialogFragment();
+            dialog.show(getParentFragmentManager(), "GitHubLoginDialog");
+        }
+    }
+
+    private void showLogoutConfirmationDialog(ApiKeyManager keyMgr) {
+        if (getContext() == null) return;
+
+        new AlertDialog.Builder(requireContext())
+                .setTitle("Log Out")
+                .setMessage("Are you sure you want to log out of Vynara GitHub Workspace?")
+                .setPositiveButton("Log Out", (dialog, which) -> {
+                    keyMgr.logoutGitHub();
+                    GitHubOAuthService.clearAuth(getContext());
+                    if (etGithubPat != null) etGithubPat.setText("");
+                    updateGitHubAuthUI(keyMgr);
+                    Toast.makeText(getContext(), "Successfully logged out.", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("Cancel", (dialog, which) -> dialog.dismiss())
+                .show();
     }
 
     private void startGitHubDeviceFlow(ApiKeyManager keyMgr) {
         if (getContext() == null) return;
-        Toast.makeText(getContext(), "Requesting Device Code from GitHub...", Toast.LENGTH_SHORT).show();
+        
+        String clientId = GitHubOAuthService.getClientId(getContext());
+        if (clientId.isEmpty()) {
+            clientId = keyMgr.getGitHubClientId();
+        }
 
-        oAuthService.requestDeviceCode(keyMgr.getGitHubClientId(), new GitHubOAuthService.DeviceCodeCallback() {
-            @Override
-            public void onDeviceCodeReceived(DeviceCodeResponse response) {
-                showDeviceCodeDialog(keyMgr, response);
+        if (clientId == null || clientId.trim().isEmpty()) {
+            Toast.makeText(getContext(), "Please configure OAuth Client ID first.", Toast.LENGTH_SHORT).show();
+            if (getParentFragmentManager() != null) {
+                ConfigureOAuthDialogFragment configDialog = new ConfigureOAuthDialogFragment();
+                configDialog.show(getParentFragmentManager(), "ConfigureOAuthDialog");
             }
+            return;
+        }
 
-            @Override
-            public void onError(String errorMessage) {
-                if (getContext() != null) {
-                    Toast.makeText(getContext(), "Device Flow Error: " + errorMessage, Toast.LENGTH_LONG).show();
-                }
-            }
-        });
-    }
-
-    private void showDeviceCodeDialog(ApiKeyManager keyMgr, DeviceCodeResponse response) {
-        if (getContext() == null) return;
-
-        AlertDialog.Builder builder = new AlertDialog.Builder(requireContext());
-        builder.setTitle("GitHub Device Sign-In");
-        builder.setMessage("Your 8-character activation code is:\n\n" + response.getUserCode() + "\n\n1. Copy the code\n2. Open the GitHub verification page\n3. Paste the code and authorize Vynara");
-        builder.setCancelable(false);
-
-        builder.setPositiveButton("Open GitHub", (dialog, which) -> {
-            ClipboardManager clipboard = (ClipboardManager) requireContext().getSystemService(Context.CLIPBOARD_SERVICE);
-            ClipData clip = ClipData.newPlainText("GitHub User Code", response.getUserCode());
-            if (clipboard != null) clipboard.setPrimaryClip(clip);
-            Toast.makeText(getContext(), "Code copied to clipboard!", Toast.LENGTH_SHORT).show();
-
-            Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(response.getVerificationUri()));
-            startActivity(browserIntent);
-        });
-
-        builder.setNegativeButton("Cancel", (dialog, which) -> {
-            oAuthService.cancelDeviceFlowPolling();
-            dialog.dismiss();
-        });
-
-        deviceCodeDialog = builder.create();
-        deviceCodeDialog.show();
-
-        // Start background polling
-        oAuthService.startDeviceFlowPolling(keyMgr.getGitHubClientId(), response.getDeviceCode(), response.getInterval(), response.getExpiresIn(), new GitHubOAuthService.DevicePollingCallback() {
-            @Override
-            public void onTokenReceived(String accessToken) {
-                if (deviceCodeDialog != null && deviceCodeDialog.isShowing()) {
-                    deviceCodeDialog.dismiss();
-                }
-
-                oAuthService.fetchUserProfile(accessToken, new GitHubOAuthService.UserProfileCallback() {
-                    @Override
-                    public void onSuccess(String login, String name, String avatarUrl) {
-                        keyMgr.saveGitHubUser(login, avatarUrl);
-                        keyMgr.saveGitHubConfig(keyMgr.getGitHubRepo(), accessToken, "vynara_generate");
-                        keyMgr.saveComputeProvider(CloudProvider.GITHUB_ACTIONS);
-                        updateGitHubAuthUI(keyMgr);
-                        if (etGithubPat != null) etGithubPat.setText(keyMgr.getMaskedGitHubPat());
-                        if (getContext() != null) {
-                            Toast.makeText(getContext(), "Signed in as @" + login + " successfully!", Toast.LENGTH_LONG).show();
-                        }
-                    }
-
-                    @Override
-                    public void onError(String errorMessage) {
-                        keyMgr.saveGitHubConfig(keyMgr.getGitHubRepo(), accessToken, "vynara_generate");
-                        updateGitHubAuthUI(keyMgr);
-                    }
-                });
-            }
-
-            @Override
-            public void onPending(String status) {}
-
-            @Override
-            public void onError(String errorMessage) {
-                if (deviceCodeDialog != null && deviceCodeDialog.isShowing()) {
-                    deviceCodeDialog.dismiss();
-                }
-                if (getContext() != null) {
-                    Toast.makeText(getContext(), "Device Flow: " + errorMessage, Toast.LENGTH_SHORT).show();
-                }
-            }
-        });
+        DeviceFlowDialogFragment dialog = DeviceFlowDialogFragment.newInstance(clientId, GitHubOAuthService.getClientSecret(getContext()));
+        dialog.show(getParentFragmentManager(), "DeviceFlowDialog");
     }
 
     private void fetchLiveModels(String apiKey, List<String> modelList, ArrayAdapter<String> modelAdapter, ApiKeyManager keyMgr, boolean showToast) {
