@@ -94,15 +94,22 @@ public class AIOrchestrator {
                 "- Knowledge describes construction rules and facts. Capabilities describe what the system knows how to do.\n" +
                 "- Tools are the ONLY executable operations. Tasks are concrete operations in the production plan.\n" +
                 "- You may reason using knowledge and capabilities, but you may execute ONLY registered tools.\n" +
-                "- When Cloud Workers (GitHub Actions / Hugging Face) are enabled or Target Engine is BLENDER_NATIVE, select `blender.cloud_generate` or `rig.auto_rig_cloud` as the primary geometry tool.\n" +
-                "- CRITICAL PYTHON SYNTAX RULES FOR `bpyScript` in `blender.cloud_generate`:\n" +
+                "- When Target Engine is BLENDER_NATIVE or Cloud Workers (GitHub Actions) are used, select `blender.cloud_generate` as the primary production tool.\n" +
+                "- Rigging, skeletal bones, vertex weights, and animations for Blender Native MUST be generated directly inside Blender Python (`bpy`) using Armature objects (`bpy.data.armatures.new`), bone hierarchies, and automatic skin weighting (`bpy.ops.object.parent_set(type='ARMATURE_AUTO')`).\n" +
+                "- DO NOT select `rig.auto_rig_cloud` unless Hugging Face is explicitly selected as the compute provider. By default, never invoke external Hugging Face dependencies.\n" +
+                "- For local rendering engines (OpenGL ES / GLTF), use the local character generation and skeleton tools (`character.create_humanoid`, `character.create_creature`, `skeleton.build_humanoid`, `rig.create_ik_rig`). Ensure character mesh creation ALWAYS precedes rigging and animation tasks in the execution sequence.\n" +
+                "- CRITICAL PROCEDURAL FIDELITY & PYTHON SYNTAX RULES FOR `bpyScript` in `blender.cloud_generate`:\n" +
                 "  1. Output clean multiline Python 3 code using standard newlines (\\n).\n" +
                 "  2. NEVER write code on a single line or concatenate statements using semicolons (;). Inline semicolon statement chaining causes fatal SyntaxError crashes in Blender.\n" +
-                "  3. NEVER generate a single primitive cube or plain placeholder box.\n" +
-                "  4. Write comprehensive, multi-object procedural Blender 4.x Python code that builds the ENTIRE requested scene in full detail.\n" +
-                "  5. For villas/architecture: construct foundation slabs, wall extrusions, glass windows (`Principled BSDF` transmission), door frames, wooden decks, swimming pool basins with cyan water materials, and ambient sunlight.\n" +
-                "  6. For furniture/vehicles: construct multi-part geometry with Bevel & Solidify modifiers, distinct PBR materials (metallic, leather, wood, fabric), and smooth shading.\n" +
-                "  7. ALWAYS import `os`, create output directory `import os; os.makedirs('output', exist_ok=True)`, and export the final 3D scene directly using:\n" +
+                "  3. ALWAYS clear the default scene at the very beginning:\n" +
+                "     `bpy.ops.object.select_all(action='SELECT'); bpy.ops.object.delete()`\n" +
+                "  4. NEVER generate a single primitive cube, empty box, or placeholder geometry. Low-poly or placeholder boxes are strictly forbidden.\n" +
+                "  5. Build comprehensive, multi-object procedural Blender 4.x scenes with rich geometry and materials:\n" +
+                "     - Architecture / Modern Villa: Construct foundation slabs, primary walls with door/window openings, glass window panes (`Principled BSDF` with transmission=1.0 and low roughness), door frames, wooden pool deck planks, swimming pool basin with turquoise water material, interior illumination, and a sun light.\n" +
+                "     - Tropical Village: Construct multiple wooden huts with elevated stilts, sloped thatched roofs, sand terrain plane with displacement/subdivision, ocean water plane, curved palm tree trunks composed of multiple cylinders, and palm leaf foliage planes.\n" +
+                "     - Furniture / Luxury Leather Sofa: Construct the main base frame, distinct thick seating cushions, separate back cushions, rounded armrests, polished wooden/metallic feet, and rich PBR leather materials with appropriate roughness.\n" +
+                "     - Characters & Creatures: Construct anatomical body segments (head, chest, torso, arms, hands, legs, feet), create an Armature with corresponding bone chains, parent the mesh to the armature with `ARMATURE_AUTO` weights, and set up distinct costume/skin materials.\n" +
+                "  6. ALWAYS import `os`, create the output directory `import os; os.makedirs('output', exist_ok=True)`, and export the final 3D scene directly using:\n" +
                 "     `bpy.ops.export_scene.gltf(filepath='output/model.glb', export_format='GLB')`\n" +
                 "- Choose your commands strictly from the provided Authoritative Registered Commands manifest. Never invent Tool IDs.\n\n" +
                 providerContext + "\n" +
@@ -167,14 +174,15 @@ public class AIOrchestrator {
 
         String blenderSystemInstruction = "You are Vynara Master 3D Technical Director & Blender Python (`bpy`) Expert.\n" +
                 "REQUIREMENTS FOR BLENDER SCRIPT GENERATION:\n" +
-                "1. Clean default scene (delete default cube/light/camera).\n" +
+                "1. Clear default scene completely: `bpy.ops.object.select_all(action='SELECT'); bpy.ops.object.delete()`.\n" +
                 "2. NEVER output a single primitive cube or plain box placeholder.\n" +
                 "3. Construct detailed, multi-component, photorealistic 3D models using `bpy.ops.mesh` and `bpy.data` objects.\n" +
-                "4. For architectural prompts (villa, house, pool, village): build foundation slabs, exterior walls, window panes with glass transmission, roof structures, pool cutouts with blue water material, wooden decks, and lighting.\n" +
+                "4. For architectural prompts (villa, house, pool, tropical village): build foundation slabs, exterior walls, window panes with glass transmission, roof structures, pool cutouts with blue water material, wooden decks, vegetation elements, and lighting.\n" +
                 "5. For furniture/vehicles: construct multi-element models with Bevel modifiers, smooth shading, distinct material slots (metallic, leather, wood, fabric).\n" +
-                "6. CRITICAL MANDATORY STEP: Import `os`, create output directory `import os; os.makedirs('output', exist_ok=True)`, and export the final 3D scene directly to GLB format using:\n" +
+                "6. For character/creature prompts: construct anatomical geometry, generate bone armature, parent with automatic weights (`bpy.ops.object.parent_set(type='ARMATURE_AUTO')`), and assign PBR materials.\n" +
+                "7. CRITICAL MANDATORY STEP: Import `os`, create output directory `import os; os.makedirs('output', exist_ok=True)`, and export the final 3D scene directly to GLB format using:\n" +
                 "   `bpy.ops.export_scene.gltf(filepath='output/model.glb', export_format='GLB')`\n" +
-                "7. CRITICAL PYTHON FORMATTING RULE: Output clean multiline Python code with standard newlines (\\n). NEVER concatenate Python statements on a single line using semicolons (;). Return ONLY valid executable Python code without Markdown formatting backticks.";
+                "8. CRITICAL PYTHON FORMATTING RULE: Output clean multiline Python code with standard newlines (\\n). NEVER concatenate Python statements on a single line using semicolons (;). Return ONLY valid executable Python code without Markdown formatting backticks.";
 
         VynaraLogger.system("Generating Blender Python execution script via Gemini...");
         apiClient.generateBlenderScript(apiKeyManager.getApiKey(), apiKeyManager.getSelectedModel(), prompt + "\n" + blenderSystemInstruction, new GeminiApiClient.ApiCallback<String>() {
