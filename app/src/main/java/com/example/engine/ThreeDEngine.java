@@ -40,7 +40,8 @@ public class ThreeDEngine {
 
         Material mat = materialManager.getMaterial("mat_default");
         if (mat == null) {
-            mat = materialManager.getDefaultPBRMaterial();
+            mat = new Material("mat_default", "Default PBR", 0.8f, 0.8f, 0.8f, 1.0f);
+            materialManager.addMaterial(mat);
         }
 
         String id = "obj_" + primitiveType + "_" + System.currentTimeMillis();
@@ -73,7 +74,8 @@ public class ThreeDEngine {
         Mesh mesh = createPrimitiveMesh("cube", w, h, d);
         Material mat = materialManager.getMaterial("mat_default");
         if (mat == null) {
-            mat = materialManager.getDefaultPBRMaterial();
+            mat = new Material("mat_default", "Default PBR", 0.8f, 0.8f, 0.8f, 1.0f);
+            materialManager.addMaterial(mat);
         }
 
         SceneObject rootObject = new SceneObject(id, objName, "STRUCTURE", mesh, mat);
