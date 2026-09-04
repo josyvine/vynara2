@@ -1,0 +1,46 @@
+name: Vynara Blender Worker
+
+on:
+  repository_dispatch:
+    types: [vynara_generate]
+
+jobs:
+  build_3d_asset:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Step 1: Check GitHub Actions Cache (Restores in ~3s on Run 2+)
+      - name: Restore Blender Cache
+        id: blender-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/blender
+          key: blender-4.2-linux-x64
+
+      # Step 2: Download ONLY on first run (Skipped on all future runs)
+      - name: Download Blender Binary
+        if: steps.blender-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo mkdir -p /opt/blender
+          curl -sL https://download.blender.org/release/Blender4.2/blender-4.2.0-linux-x64.tar.xz | sudo tar -xJ --strip-components=1 -C /opt/blender
+
+      # Step 3: Run directly from cached binary (Instant startup)
+      - name: Execute Blender Python Script
+        run: |
+          mkdir -p output
+          
+          # Write the Python script received from the Vynara Android app
+          echo "${{ github.event.client_payload.bpy_script }}" > run_task.py
+          
+          # Run headless Blender
+          /opt/blender/blender -b -P run_task.py -- output/model.glb
+
+      # Step 4: Upload generated GLB file so the app can download it
+      - name: Upload Finished Model
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.client_payload.asset_id }}
+          path: output/model.glb
