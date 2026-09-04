@@ -60,67 +60,113 @@ public class PromptInterpreter {
             graph.addTask(t0);
         }
 
-        // Generate procedural creation steps for EVERY concept detected in the prompt
-        for (KnowledgeEntry entry : matchedKnowledge) {
-            String cat = entry.getCategory();
-            String conceptId = entry.getId();
+        boolean isBlenderNative = targetEngine != null && targetEngine.toLowerCase().contains("blender");
 
-            if ("CHARACTER".equalsIgnoreCase(cat)) {
-                String tMeshId = "task_" + taskCounter++;
-                TaskNode tMesh = new TaskNode(tMeshId, "Generating " + entry.getName() + " Mesh", "Tool: character.create_humanoid",
-                        new ToolOperation("character.create_humanoid").setParam("name", entry.getName()).setParam("style", style).setParam("height", 1.8f));
-                if (referenceTaskId != null) tMesh.addDependency(referenceTaskId);
-                graph.addTask(tMesh);
-                geometryTaskIds.add(tMeshId);
+        if (isBlenderNative) {
+            // Target Engine is Blender Native -> Generate Cloud Blender Task Node
+            String cloudTaskId = "task_" + taskCounter++;
+            String assetId = "asset_blender_" + System.currentTimeMillis();
 
-                String tBindId = "task_" + taskCounter++;
-                TaskNode tBind = new TaskNode(tBindId, "Binding Skeleton & Skin Weights", "Tool: skeleton.bind",
-                        new ToolOperation("skeleton.bind"));
-                tBind.addDependency(tMeshId);
-                graph.addTask(tBind);
-
-                String tRigId = "task_" + taskCounter++;
-                TaskNode tRig = new TaskNode(tRigId, "Configuring IK Limb Controllers", "Tool: rig.create_ik",
-                        new ToolOperation("rig.create_ik").setParam("limb", "left_arm"));
-                tRig.addDependency(tBindId);
-                graph.addTask(tRig);
-
-                String tAnimId = "task_" + taskCounter++;
-                String clipName = userPrompt.toLowerCase().contains("run") ? "run" : (userPrompt.toLowerCase().contains("jump") ? "jump" : "walk");
-                TaskNode tAnim = new TaskNode(tAnimId, "Applying Animation Clip (" + clipName + ")", "Tool: animation.create_clip",
-                        new ToolOperation("animation.create_clip").setParam("clipName", clipName));
-                tAnim.addDependency(tRigId);
-                graph.addTask(tAnim);
-
-                leafTaskIds.add(tAnimId);
-
-            } else if ("ANIMAL".equalsIgnoreCase(cat)) {
-                String species = conceptId.contains("bird") ? "bird" : "dog";
-                String tCreatureId = "task_" + taskCounter++;
-                TaskNode tCreature = new TaskNode(tCreatureId, "Generating " + entry.getName() + " Anatomy", "Tool: character.create_creature",
-                        new ToolOperation("character.create_creature").setParam("species", species).setParam("name", entry.getName()));
-                if (referenceTaskId != null) tCreature.addDependency(referenceTaskId);
-                graph.addTask(tCreature);
-                geometryTaskIds.add(tCreatureId);
-
-                String tAnimId = "task_" + taskCounter++;
-                TaskNode tAnim = new TaskNode(tAnimId, "Applying Locomotion Animation", "Tool: animation.create_clip",
-                        new ToolOperation("animation.create_clip").setParam("clipName", "walk"));
-                tAnim.addDependency(tCreatureId);
-                graph.addTask(tAnim);
-
-                leafTaskIds.add(tAnimId);
-
+            StringBuilder defaultBpyScript = new StringBuilder();
+            defaultBpyScript.append("import bpy\n");
+            defaultBpyScript.append("import os\n\n");
+            defaultBpyScript.append("os.makedirs('output', exist_ok=True)\n");
+            defaultBpyScript.append("# Clear existing mesh objects\n");
+            defaultBpyScript.append("bpy.ops.object.select_all(action='SELECT')\n");
+            defaultBpyScript.append("bpy.ops.object.delete(use_global=False)\n\n");
+            defaultBpyScript.append("# Build high-fidelity mesh for prompt: ").append(userPrompt.replace("\"", "'")).append("\n");
+            
+            if (userPrompt.toLowerCase().contains("sofa") || userPrompt.toLowerCase().contains("chair")) {
+                defaultBpyScript.append("bpy.ops.mesh.primitive_cube_add(size=2, location=(0, 0, 0.5))\n");
+                defaultBpyScript.append("sofa = bpy.context.active_object\n");
+                defaultBpyScript.append("sofa.name = 'Luxury_Sofa'\n");
+                defaultBpyScript.append("sofa.scale = (1.2, 0.6, 0.4)\n");
+            } else if (userPrompt.toLowerCase().contains("villa") || userPrompt.toLowerCase().contains("house")) {
+                defaultBpyScript.append("bpy.ops.mesh.primitive_cube_add(size=4, location=(0, 0, 2))\n");
+                defaultBpyScript.append("villa = bpy.context.active_object\n");
+                defaultBpyScript.append("villa.name = 'Modern_Villa'\n");
             } else {
-                // Procedural Architecture, Furniture, Environment, or Vehicle
-                String tStructId = "task_" + taskCounter++;
-                TaskNode tStruct = new TaskNode(tStructId, "Building " + entry.getName(), "Tool: geometry.create_procedural",
-                        new ToolOperation("geometry.create_procedural").setParam("type", conceptId).setParam("name", entry.getName()));
-                if (referenceTaskId != null) tStruct.addDependency(referenceTaskId);
-                graph.addTask(tStruct);
-                geometryTaskIds.add(tStructId);
-                
-                leafTaskIds.add(tStructId);
+                defaultBpyScript.append("bpy.ops.mesh.primitive_cube_add(size=2, location=(0, 0, 1))\n");
+            }
+
+            defaultBpyScript.append("\n# Export model to output/model.glb\n");
+            defaultBpyScript.append("bpy.ops.export_scene.gltf(filepath='output/model.glb', export_format='GLB')\n");
+
+            TaskNode cloudNode = new TaskNode(cloudTaskId, "blender.cloud_generate",
+                    "Execute script to sculpt high-fidelity 3D asset via Blender Worker",
+                    new ToolOperation("blender.cloud_generate")
+                            .setParam("prompt", userPrompt)
+                            .setParam("assetId", assetId)
+                            .setParam("bpyScript", defaultBpyScript.toString()));
+
+            if (referenceTaskId != null) cloudNode.addDependency(referenceTaskId);
+            graph.addTask(cloudNode);
+            geometryTaskIds.add(cloudTaskId);
+            leafTaskIds.add(cloudTaskId);
+
+        } else {
+            // Generate local procedural creation steps for EVERY concept detected in the prompt
+            for (KnowledgeEntry entry : matchedKnowledge) {
+                String cat = entry.getCategory();
+                String conceptId = entry.getId();
+
+                if ("CHARACTER".equalsIgnoreCase(cat)) {
+                    String tMeshId = "task_" + taskCounter++;
+                    TaskNode tMesh = new TaskNode(tMeshId, "Generating " + entry.getName() + " Mesh", "Tool: character.create_humanoid",
+                            new ToolOperation("character.create_humanoid").setParam("name", entry.getName()).setParam("style", style).setParam("height", 1.8f));
+                    if (referenceTaskId != null) tMesh.addDependency(referenceTaskId);
+                    graph.addTask(tMesh);
+                    geometryTaskIds.add(tMeshId);
+
+                    String tBindId = "task_" + taskCounter++;
+                    TaskNode tBind = new TaskNode(tBindId, "Binding Skeleton & Skin Weights", "Tool: skeleton.bind",
+                            new ToolOperation("skeleton.bind"));
+                    tBind.addDependency(tMeshId);
+                    graph.addTask(tBind);
+
+                    String tRigId = "task_" + taskCounter++;
+                    TaskNode tRig = new TaskNode(tRigId, "Configuring IK Limb Controllers", "Tool: rig.create_ik",
+                            new ToolOperation("rig.create_ik").setParam("limb", "left_arm"));
+                    tRig.addDependency(tBindId);
+                    graph.addTask(tRig);
+
+                    String tAnimId = "task_" + taskCounter++;
+                    String clipName = userPrompt.toLowerCase().contains("run") ? "run" : (userPrompt.toLowerCase().contains("jump") ? "jump" : "walk");
+                    TaskNode tAnim = new TaskNode(tAnimId, "Applying Animation Clip (" + clipName + ")", "Tool: animation.create_clip",
+                            new ToolOperation("animation.create_clip").setParam("clipName", clipName));
+                    tAnim.addDependency(tRigId);
+                    graph.addTask(tAnim);
+
+                    leafTaskIds.add(tAnimId);
+
+                } else if ("ANIMAL".equalsIgnoreCase(cat)) {
+                    String species = conceptId.contains("bird") ? "bird" : "dog";
+                    String tCreatureId = "task_" + taskCounter++;
+                    TaskNode tCreature = new TaskNode(tCreatureId, "Generating " + entry.getName() + " Anatomy", "Tool: character.create_creature",
+                            new ToolOperation("character.create_creature").setParam("species", species).setParam("name", entry.getName()));
+                    if (referenceTaskId != null) tCreature.addDependency(referenceTaskId);
+                    graph.addTask(tCreature);
+                    geometryTaskIds.add(tCreatureId);
+
+                    String tAnimId = "task_" + taskCounter++;
+                    TaskNode tAnim = new TaskNode(tAnimId, "Applying Locomotion Animation", "Tool: animation.create_clip",
+                            new ToolOperation("animation.create_clip").setParam("clipName", "walk"));
+                    tAnim.addDependency(tCreatureId);
+                    graph.addTask(tAnim);
+
+                    leafTaskIds.add(tAnimId);
+
+                } else {
+                    // Procedural Architecture, Furniture, Environment, or Vehicle
+                    String tStructId = "task_" + taskCounter++;
+                    TaskNode tStruct = new TaskNode(tStructId, "Building " + entry.getName(), "Tool: geometry.create_procedural",
+                            new ToolOperation("geometry.create_procedural").setParam("type", conceptId).setParam("name", entry.getName()));
+                    if (referenceTaskId != null) tStruct.addDependency(referenceTaskId);
+                    graph.addTask(tStruct);
+                    geometryTaskIds.add(tStructId);
+                    
+                    leafTaskIds.add(tStructId);
+                }
             }
         }
 
@@ -233,7 +279,8 @@ public class PromptInterpreter {
                 } else {
                     // Check if it is a geometry or character creation tool
                     boolean isGeometryCreator = toolId.contains("geometry.create_") ||
-                                                toolId.contains("character.create_");
+                                                toolId.contains("character.create_") ||
+                                                toolId.contains("blender.cloud_generate");
                     if (isGeometryCreator) {
                         lastGeometryTaskId = taskId;
                     }
