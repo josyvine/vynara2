@@ -184,6 +184,8 @@ public class InAppFloatingConsoleView extends FrameLayout implements VynaraLogge
                 return "#FFB74D"; // Light Amber/Orange
             case VALIDATION:
                 return "#81C784"; // Light Green
+            case CLOUD:
+                return "#40C4FF"; // Vibrant Cloud Cyan/Blue
             default:
                 return "#FFFFFF";
         }
