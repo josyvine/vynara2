@@ -652,7 +652,7 @@ public class ToolExecutor {
 
             Character existingChar = null;
             for (Character c : characterManager.getCharacterMap().values()) {
-                if (c.getRootObject() != null && c.getRootObject().getId().equals(target.getId())) {
+                if (c.getSceneObject() != null && c.getSceneObject().getId().equals(target.getId())) {
                     existingChar = c;
                     break;
                 }
@@ -699,9 +699,9 @@ public class ToolExecutor {
 
             for (SceneObject obj : objects) {
                 if (obj.getTransform() != null) {
-                    float px = obj.getTransform().getPositionX();
-                    float py = obj.getTransform().getPositionY();
-                    float pz = obj.getTransform().getPositionZ();
+                    float px = obj.getTransform().getPx();
+                    float py = obj.getTransform().getPy();
+                    float pz = obj.getTransform().getPz();
                     minX = Math.min(minX, px - 1.5f); maxX = Math.max(maxX, px + 1.5f);
                     minY = Math.min(minY, py);        maxY = Math.max(maxY, py + 2.0f);
                     minZ = Math.min(minZ, pz - 1.5f); maxZ = Math.max(maxZ, pz + 1.5f);
