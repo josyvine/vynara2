@@ -269,7 +269,7 @@ public class StudioFragment extends Fragment {
     }
 
     /**
-     * Touch Event Handler: Translates touch drag physics on the 3D surface view directly into camera orbit rotation.
+     * Touch Event Handler: Translates touch drag physics on the 3D surface view directly into spherical camera orbit rotation.
      */
     private void setupViewportTouchOrbitGesture() {
         if (glSurfaceView == null) return;
@@ -299,8 +299,33 @@ public class StudioFragment extends Fragment {
                         if (engine != null && engine.getCameraManager() != null) {
                             com.example.engine.Camera camera = engine.getCameraManager().getActiveCamera();
                             if (camera != null) {
-                                float sensitivity = 0.35f;
-                                camera.orbit(deltaX * sensitivity, -deltaY * sensitivity);
+                                float[] eye = camera.getEye();
+                                float[] target = camera.getTarget();
+
+                                if (eye != null && target != null && eye.length >= 3 && target.length >= 3) {
+                                    float relX = eye[0] - target[0];
+                                    float relY = eye[1] - target[1];
+                                    float relZ = eye[2] - target[2];
+
+                                    float radius = (float) Math.sqrt(relX * relX + relY * relY + relZ * relZ);
+                                    if (radius < 0.001f) radius = 5.0f;
+
+                                    float yaw = (float) Math.atan2(relZ, relX);
+                                    float pitch = (float) Math.asin(Math.max(-0.99f, Math.min(0.99f, relY / radius)));
+
+                                    yaw += deltaX * 0.008f;
+                                    pitch += deltaY * 0.008f;
+
+                                    float maxPitch = 1.52f; // ~87 degrees limit
+                                    if (pitch > maxPitch) pitch = maxPitch;
+                                    if (pitch < -maxPitch) pitch = -maxPitch;
+
+                                    float newX = target[0] + radius * (float) (Math.cos(pitch) * Math.cos(yaw));
+                                    float newY = target[1] + radius * (float) Math.sin(pitch);
+                                    float newZ = target[2] + radius * (float) (Math.cos(pitch) * Math.sin(yaw));
+
+                                    camera.setEye(newX, newY, newZ);
+                                }
                             }
                         }
 
