@@ -315,6 +315,9 @@ public class ToolExecutor {
                     return false;
                 }
 
+                final String targetRepo = repo;
+                final String targetPat = pat;
+
                 File outputGlb = new File(ProjectRuntime.getInstance().getContext().getFilesDir(), "models_cache/" + assetId + ".glb");
                 final CountDownLatch latch = new CountDownLatch(1);
                 final AtomicBoolean success = new AtomicBoolean(false);
@@ -354,10 +357,10 @@ public class ToolExecutor {
                     });
                 } else {
                     GitHubWorkflowBridge ghBridge = new GitHubWorkflowBridge();
-                    ghBridge.dispatchGenerationWorkflow(repo, pat, "vynara_generate", assetId, bpyScript, new GitHubWorkflowBridge.WorkflowDispatchCallback() {
+                    ghBridge.dispatchGenerationWorkflow(targetRepo, targetPat, "vynara_generate", assetId, bpyScript, new GitHubWorkflowBridge.WorkflowDispatchCallback() {
                         @Override
                         public void onDispatched(String eventType, String aId) {
-                            VynaraLogger.system("GitHub generation workflow dispatched successfully to " + repo);
+                            VynaraLogger.system("GitHub generation workflow dispatched successfully to " + targetRepo);
                             success.set(true);
                             latch.countDown();
                         }
