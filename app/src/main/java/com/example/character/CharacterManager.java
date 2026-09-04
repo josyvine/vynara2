@@ -31,7 +31,14 @@ public class CharacterManager {
         MaterialManager matMgr = engine != null ? engine.getMaterialManager() : new MaterialManager();
 
         Mesh baseMesh = createBaseCharacterMesh(spec.getHeight(), 0.5f, 0.3f);
-        Material mat = matMgr != null ? matMgr.getDefaultPBRMaterial() : new Material("mat_" + id, "CharMat", 0.2f, 0.6f, 0.9f, 1.0f);
+        Material mat = matMgr != null ? matMgr.getMaterial("mat_default") : null;
+        if (mat == null) {
+            mat = new Material("mat_" + id, "CharMat", 0.2f, 0.6f, 0.9f, 1.0f);
+            if (matMgr != null) {
+                matMgr.addMaterial(mat);
+            }
+        }
+
         SceneObject characterMeshObj = new SceneObject(id, spec.getName(), "CHARACTER", baseMesh, mat);
 
         if (engine != null && engine.getSceneManager() != null && engine.getSceneManager().getActiveScene() != null) {
@@ -68,7 +75,14 @@ public class CharacterManager {
 
         MaterialManager matMgr = engine != null ? engine.getMaterialManager() : new MaterialManager();
         Mesh baseMesh = createBaseCharacterMesh(1.0f, 0.8f, 1.2f);
-        Material mat = matMgr != null ? matMgr.getDefaultPBRMaterial() : new Material("mat_" + id, "CreatureMat", 0.8f, 0.5f, 0.2f, 1.0f);
+        Material mat = matMgr != null ? matMgr.getMaterial("mat_default") : null;
+        if (mat == null) {
+            mat = new Material("mat_" + id, "CreatureMat", 0.8f, 0.5f, 0.2f, 1.0f);
+            if (matMgr != null) {
+                matMgr.addMaterial(mat);
+            }
+        }
+
         SceneObject creatureMeshObj = new SceneObject(id, spec.getName(), "CREATURE", baseMesh, mat);
 
         if (engine != null && engine.getSceneManager() != null && engine.getSceneManager().getActiveScene() != null) {
