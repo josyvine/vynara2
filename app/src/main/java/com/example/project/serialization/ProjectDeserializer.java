@@ -1,13 +1,10 @@
 package com.example.project.serialization;
 
-import com.example.character.CharacterSpecification;
 import com.example.engine.Material;
 import com.example.engine.MaterialManager;
 import com.example.engine.Mesh;
-import com.example.engine.PrimitiveGenerator;
 import com.example.engine.Scene;
 import com.example.engine.SceneObject;
-import com.example.engine.generators.*;
 import com.example.project.Project;
 
 import org.json.JSONArray;
@@ -136,60 +133,7 @@ public class ProjectDeserializer {
                         }
                     }
 
-                    // Reconstruct procedural mesh geometries using dynamic CAD recipes
-                    Mesh rebuiltMesh = null;
-                    String cleanSemType = semType.toUpperCase().trim();
-                    String cleanName = objName.toLowerCase().trim();
-
-                    if ("PRIMITIVE".equals(cleanSemType)) {
-                        float radius = width / 2.0f;
-                        if (cleanName.contains("sphere")) {
-                            rebuiltMesh = PrimitiveGenerator.createSphere(radius, 16, 16);
-                        } else if (cleanName.contains("cylinder")) {
-                            rebuiltMesh = PrimitiveGenerator.createCylinder(radius, height, 16);
-                        } else if (cleanName.contains("plane")) {
-                            rebuiltMesh = PrimitiveGenerator.createPlane(width, depth);
-                        } else if (cleanName.contains("cone")) {
-                            rebuiltMesh = PrimitiveGenerator.createCylinder(radius, height, 3);
-                        } else if (cleanName.contains("torus")) {
-                            rebuiltMesh = PrimitiveGenerator.createTorus(width * 0.4f, width * 0.1f, 16, 16);
-                        } else {
-                            rebuiltMesh = PrimitiveGenerator.createCube(width, height, depth);
-                        }
-                    } else if ("SOFA".equals(cleanSemType)) {
-                        SceneObject tempSofa = SofaGenerator.generateSofa(objId, objName, matMgr);
-                        if (tempSofa != null) rebuiltMesh = tempSofa.getMesh();
-                    } else if ("HOUSE".equals(cleanSemType)) {
-                        SceneObject tempHouse = HouseGenerator.generateHouse(objId, objName, matMgr);
-                        if (tempHouse != null) rebuiltMesh = tempHouse.getMesh();
-                    } else if ("POOL".equals(cleanSemType)) {
-                        SceneObject tempPool = PoolGenerator.generatePool(objId, objName, matMgr);
-                        if (tempPool != null) rebuiltMesh = tempPool.getMesh();
-                    } else if ("TABLE".equals(cleanSemType)) {
-                        SceneObject tempTable = TableGenerator.generateTable(objId, objName, matMgr);
-                        if (tempTable != null) rebuiltMesh = tempTable.getMesh();
-                    } else if ("CHAIR".equals(cleanSemType)) {
-                        SceneObject tempChair = ChairGenerator.generateChair(objId, objName, matMgr);
-                        if (tempChair != null) rebuiltMesh = tempChair.getMesh();
-                    } else if ("VILLA".equals(cleanSemType)) {
-                        SceneObject tempVilla = VillaGenerator.generateVilla(objId, objName, matMgr);
-                        if (tempVilla != null) rebuiltMesh = tempVilla.getMesh();
-                    } else if ("TREE".equals(cleanSemType)) {
-                        SceneObject tempTree = TreeGenerator.generateTree(objId, objName, matMgr);
-                        if (tempTree != null) rebuiltMesh = tempTree.getMesh();
-                    } else if ("CHARACTER".equals(cleanSemType)) {
-                        SceneObject tempHumanoid = HumanoidGenerator.generateHumanoidMesh(objId, new CharacterSpecification("HUMANOID", objName), matMgr);
-                        if (tempHumanoid != null) rebuiltMesh = tempHumanoid.getMesh();
-                    } else if ("CREATURE".equals(cleanSemType)) {
-                        String species = cleanName.contains("bird") ? "bird" : "dog";
-                        SceneObject tempCreature = CreatureGenerator.generateCreatureMesh(objId, new CharacterSpecification(species, objName), matMgr);
-                        if (tempCreature != null) rebuiltMesh = tempCreature.getMesh();
-                    }
-
-                    // Direct fallback if specific recipe generation fails
-                    if (rebuiltMesh == null) {
-                        rebuiltMesh = PrimitiveGenerator.createCube(width, height, depth);
-                    }
+                    Mesh rebuiltMesh = createBoxMesh(width > 0 ? width : 1.5f, height > 0 ? height : 1.5f, depth > 0 ? depth : 1.5f);
 
                     SceneObject obj = new SceneObject(objId, objName, semType, rebuiltMesh, boundMat);
                     obj.setVisible(visible);
@@ -244,5 +188,42 @@ public class ProjectDeserializer {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private static Mesh createBoxMesh(float width, float height, float depth) {
+        float hw = width / 2.0f, hh = height / 2.0f, hd = depth / 2.0f;
+        float[] positions = new float[]{
+            -hw, -hh,  hd,   hw, -hh,  hd,   hw,  hh,  hd,  -hw,  hh,  hd, // Front
+            -hw, -hh, -hd,  -hw,  hh, -hd,   hw,  hh, -hd,   hw, -hh, -hd, // Back
+            -hw,  hh, -hd,  -hw,  hh,  hd,   hw,  hh,  hd,   hw,  hh, -hd, // Top
+            -hw, -hh, -hd,   hw, -hh, -hd,   hw, -hh,  hd,  -hw, -hh,  hd, // Bottom
+             hw, -hh, -hd,   hw,  hh, -hd,   hw,  hh,  hd,   hw, -hh,  hd, // Right
+            -hw, -hh, -hd,  -hw, -hh,  hd,  -hw,  hh,  hd,  -hw,  hh, -hd  // Left
+        };
+        float[] normals = new float[]{
+             0,  0,  1,   0,  0,  1,   0,  0,  1,   0,  0,  1,
+             0,  0, -1,   0,  0, -1,   0,  0, -1,   0,  0, -1,
+             0,  1,  0,   0,  1,  0,   0,  1,  0,   0,  1,  0,
+             0, -1,  0,   0, -1,  0,   0, -1,  0,   0, -1,  0,
+             1,  0,  0,   1,  0,  0,   1,  0,  0,   1,  0,  0,
+            -1,  0,  0,  -1,  0,  0,  -1,  0,  0,  -1,  0,  0
+        };
+        float[] uvs = new float[]{
+            0,0, 1,0, 1,1, 0,1,
+            1,0, 1,1, 0,1, 0,0,
+            0,1, 0,0, 1,0, 1,1,
+            1,1, 0,1, 0,0, 1,0,
+            1,0, 1,1, 0,1, 0,0,
+            0,0, 1,0, 1,1, 0,1
+        };
+        short[] indices = new short[]{
+             0,  1,  2,   0,  2,  3,
+             4,  5,  6,   4,  6,  7,
+             8,  9, 10,   8, 10, 11,
+            12, 13, 14,  12, 14, 15,
+            16, 17, 18,  16, 18, 19,
+            20, 21, 22,  20, 22, 23
+        };
+        return new Mesh(positions, normals, uvs, indices);
     }
 }
