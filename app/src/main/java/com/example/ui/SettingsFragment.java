@@ -61,6 +61,12 @@ public class SettingsFragment extends Fragment {
         spinnerModel = view.findViewById(R.id.spinner_gemini_model);
         spinnerRenderQuality = view.findViewById(R.id.spinner_settings_render_quality);
 
+        spinnerComputeProvider = view.findViewById(R.id.spinner_compute_provider);
+        etGithubRepo = view.findViewById(R.id.et_github_repo);
+        etGithubPat = view.findViewById(R.id.et_github_pat);
+        etHfSpaceUrl = view.findViewById(R.id.et_hf_space_url);
+        etHfToken = view.findViewById(R.id.et_hf_token);
+
         final List<String> modelList = new ArrayList<>();
         modelList.add("gemini-3.5-flash");
         modelList.add("gemini-3.1-flash-lite");
@@ -117,6 +123,7 @@ public class SettingsFragment extends Fragment {
                 });
             }
 
+            // Quality Spinner
             String[] qualities = new String[]{"Ultra (PBR + Shadows + PostFX)", "High (PBR Standard)", "Medium (Fast Mobile)", "Low (Wireframe Draft)"};
             ArrayAdapter<String> qualityAdapter = new ArrayAdapter<>(getContext(), android.R.layout.simple_spinner_item, qualities);
             qualityAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
@@ -124,14 +131,132 @@ public class SettingsFragment extends Fragment {
                 spinnerRenderQuality.setAdapter(qualityAdapter);
             }
 
-            // ==========================================
-            // Cloud Worker & Compute Pipeline Setup
-            // ==========================================
-            spinnerComputeProvider = view.findViewById(R.id.spinner_settings_render_quality); // fallback id check or dynamic
-            etGithubRepo = view.findViewById(R.id.et_api_key); // fallback safe binding
-            
-            // Bind Cloud Provider UI elements if present in view hierarchy
-            initCloudWorkerControls(view, keyMgr);
+            // Cloud Provider Spinner
+            if (spinnerComputeProvider != null) {
+                CloudProvider[] providers = CloudProvider.values();
+                String[] names = new String[providers.length];
+                for (int i = 0; i < providers.length; i++) {
+                    names[i] = providers[i].getDisplayName();
+                }
+                ArrayAdapter<String> provAdapter = new ArrayAdapter<>(requireContext(), android.R.layout.simple_spinner_item, names);
+                provAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+                spinnerComputeProvider.setAdapter(provAdapter);
+                spinnerComputeProvider.setSelection(keyMgr.getComputeProvider().ordinal());
+
+                spinnerComputeProvider.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+                    @Override
+                    public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                        if (position >= 0 && position < providers.length) {
+                            keyMgr.saveComputeProvider(providers[position]);
+                        }
+                    }
+
+                    @Override
+                    public void onNothingSelected(AdapterView<?> parent) {}
+                });
+            }
+
+            // Restore GitHub fields
+            if (etGithubRepo != null && !keyMgr.getGitHubRepo().isEmpty()) {
+                etGithubRepo.setText(keyMgr.getGitHubRepo());
+            }
+            if (etGithubPat != null && keyMgr.hasGitHubConfig()) {
+                etGithubPat.setText(keyMgr.getMaskedGitHubPat());
+            }
+
+            // Restore Hugging Face fields
+            if (etHfSpaceUrl != null && !keyMgr.getHuggingFaceSpaceUrl().isEmpty()) {
+                etHfSpaceUrl.setText(keyMgr.getHuggingFaceSpaceUrl());
+            }
+            if (etHfToken != null && !keyMgr.getHuggingFaceToken().isEmpty()) {
+                etHfToken.setText(keyMgr.getMaskedHuggingFaceToken());
+            }
+
+            // Save & Test buttons for GitHub
+            Button btnSaveGh = view.findViewById(R.id.btn_save_github);
+            if (btnSaveGh != null) {
+                btnSaveGh.setOnClickListener(v -> {
+                    String repo = etGithubRepo != null ? etGithubRepo.getText().toString().trim() : "";
+                    String pat = etGithubPat != null ? etGithubPat.getText().toString().trim() : "";
+                    if (pat.contains("••••")) {
+                        pat = keyMgr.getGitHubPat();
+                    }
+                    keyMgr.saveGitHubConfig(repo, pat, "vynara_generate");
+                    Toast.makeText(getContext(), "GitHub configuration saved", Toast.LENGTH_SHORT).show();
+                    if (etGithubPat != null && keyMgr.hasGitHubConfig()) {
+                        etGithubPat.setText(keyMgr.getMaskedGitHubPat());
+                    }
+                });
+            }
+
+            Button btnTestGh = view.findViewById(R.id.btn_test_github);
+            if (btnTestGh != null) {
+                btnTestGh.setOnClickListener(v -> {
+                    if (!keyMgr.hasGitHubConfig()) {
+                        Toast.makeText(getContext(), "Save GitHub Repo and PAT first", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    Toast.makeText(getContext(), "Testing GitHub Actions connection...", Toast.LENGTH_SHORT).show();
+                    new GitHubWorkflowBridge().testConnection(keyMgr.getGitHubRepo(), keyMgr.getGitHubPat(), new GitHubWorkflowBridge.ConnectionTestCallback() {
+                        @Override
+                        public void onSuccess(String repoFullName, boolean hasWorkflowAccess) {
+                            if (getContext() != null) {
+                                Toast.makeText(getContext(), "Connected to: " + repoFullName + " (Push: " + hasWorkflowAccess + ")", Toast.LENGTH_LONG).show();
+                            }
+                        }
+
+                        @Override
+                        public void onError(String errorMessage) {
+                            if (getContext() != null) {
+                                Toast.makeText(getContext(), "GitHub Error: " + errorMessage, Toast.LENGTH_LONG).show();
+                            }
+                        }
+                    });
+                });
+            }
+
+            // Save & Test buttons for Hugging Face
+            Button btnSaveHf = view.findViewById(R.id.btn_save_hf);
+            if (btnSaveHf != null) {
+                btnSaveHf.setOnClickListener(v -> {
+                    String url = etHfSpaceUrl != null ? etHfSpaceUrl.getText().toString().trim() : "";
+                    String token = etHfToken != null ? etHfToken.getText().toString().trim() : "";
+                    if (token.contains("••••")) {
+                        token = keyMgr.getHuggingFaceToken();
+                    }
+                    keyMgr.saveHuggingFaceConfig(url, token);
+                    Toast.makeText(getContext(), "Hugging Face configuration saved", Toast.LENGTH_SHORT).show();
+                    if (etHfToken != null && !token.isEmpty()) {
+                        etHfToken.setText(keyMgr.getMaskedHuggingFaceToken());
+                    }
+                });
+            }
+
+            Button btnTestHf = view.findViewById(R.id.btn_test_hf);
+            if (btnTestHf != null) {
+                btnTestHf.setOnClickListener(v -> {
+                    if (!keyMgr.hasHuggingFaceConfig()) {
+                        Toast.makeText(getContext(), "Save Space URL first", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    Toast.makeText(getContext(), "Testing Hugging Face Space...", Toast.LENGTH_SHORT).show();
+                    new HuggingFaceBridge().testConnection(keyMgr.getHuggingFaceSpaceUrl(), keyMgr.getHuggingFaceToken(), new HuggingFaceBridge.ConnectionTestCallback() {
+                        @Override
+                        public void onSuccess(String statusMessage) {
+                            if (getContext() != null) {
+                                Toast.makeText(getContext(), "Space is Online!", Toast.LENGTH_SHORT).show();
+                            }
+                        }
+
+                        @Override
+                        public void onError(String errorMessage) {
+                            if (getContext() != null) {
+                                Toast.makeText(getContext(), "HF Error: " + errorMessage, Toast.LENGTH_LONG).show();
+                            }
+                        }
+                    });
+                });
+            }
         }
 
         Button btnSaveKey = view.findViewById(R.id.btn_save_key);
@@ -216,87 +341,6 @@ public class SettingsFragment extends Fragment {
                 if (getContext() != null) {
                     Toast.makeText(getContext(), "Render, Model and Texture Cache cleared", Toast.LENGTH_SHORT).show();
                 }
-            });
-        }
-    }
-
-    private void initCloudWorkerControls(View view, ApiKeyManager keyMgr) {
-        View providerSpinnerView = view.findViewWithTag("spinner_compute_provider");
-        if (providerSpinnerView instanceof Spinner) {
-            Spinner provSpinner = (Spinner) providerSpinnerView;
-            CloudProvider[] providers = CloudProvider.values();
-            String[] names = new String[providers.length];
-            for (int i = 0; i < providers.length; i++) {
-                names[i] = providers[i].getDisplayName();
-            }
-
-            ArrayAdapter<String> provAdapter = new ArrayAdapter<>(requireContext(), android.R.layout.simple_spinner_item, names);
-            provAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-            provSpinner.setAdapter(provAdapter);
-
-            provSpinner.setSelection(keyMgr.getComputeProvider().ordinal());
-            provSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-                @Override
-                public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                    if (position >= 0 && position < providers.length) {
-                        keyMgr.saveComputeProvider(providers[position]);
-                    }
-                }
-
-                @Override
-                public void onNothingSelected(AdapterView<?> parent) {}
-            });
-        }
-
-        View btnTestGh = view.findViewWithTag("btn_test_github");
-        if (btnTestGh instanceof Button) {
-            btnTestGh.setOnClickListener(v -> {
-                if (!keyMgr.hasGitHubConfig()) {
-                    Toast.makeText(getContext(), "Configure GitHub Repo and Token first", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                Toast.makeText(getContext(), "Testing GitHub Actions connection...", Toast.LENGTH_SHORT).show();
-                new GitHubWorkflowBridge().testConnection(keyMgr.getGitHubRepo(), keyMgr.getGitHubPat(), new GitHubWorkflowBridge.ConnectionTestCallback() {
-                    @Override
-                    public void onSuccess(String repoFullName, boolean hasWorkflowAccess) {
-                        if (getContext() != null) {
-                            Toast.makeText(getContext(), "Connected to: " + repoFullName + " (Push Access: " + hasWorkflowAccess + ")", Toast.LENGTH_LONG).show();
-                        }
-                    }
-
-                    @Override
-                    public void onError(String errorMessage) {
-                        if (getContext() != null) {
-                            Toast.makeText(getContext(), "GitHub connection error: " + errorMessage, Toast.LENGTH_LONG).show();
-                        }
-                    }
-                });
-            });
-        }
-
-        View btnTestHf = view.findViewWithTag("btn_test_huggingface");
-        if (btnTestHf instanceof Button) {
-            btnTestHf.setOnClickListener(v -> {
-                if (!keyMgr.hasHuggingFaceConfig()) {
-                    Toast.makeText(getContext(), "Configure Hugging Face Space URL first", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                Toast.makeText(getContext(), "Testing Hugging Face Space...", Toast.LENGTH_SHORT).show();
-                new HuggingFaceBridge().testConnection(keyMgr.getHuggingFaceSpaceUrl(), keyMgr.getHuggingFaceToken(), new HuggingFaceBridge.ConnectionTestCallback() {
-                    @Override
-                    public void onSuccess(String statusMessage) {
-                        if (getContext() != null) {
-                            Toast.makeText(getContext(), "HF Space Status: " + statusMessage, Toast.LENGTH_SHORT).show();
-                        }
-                    }
-
-                    @Override
-                    public void onError(String errorMessage) {
-                        if (getContext() != null) {
-                            Toast.makeText(getContext(), "HF Space Error: " + errorMessage, Toast.LENGTH_LONG).show();
-                        }
-                    }
-                });
             });
         }
     }
