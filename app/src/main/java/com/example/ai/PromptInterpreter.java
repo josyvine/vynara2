@@ -70,7 +70,9 @@ public class PromptInterpreter {
             String lowerPrompt = userPrompt.toLowerCase();
             StringBuilder defaultBpyScript = new StringBuilder();
             defaultBpyScript.append("import bpy\n");
-            defaultBpyScript.append("import os\n\n");
+            defaultBpyScript.append("import os\n");
+            defaultBpyScript.append("import math\n");
+            defaultBpyScript.append("import random\n\n");
             defaultBpyScript.append("os.makedirs('output', exist_ok=True)\n");
             defaultBpyScript.append("# Clear default startup scene\n");
             defaultBpyScript.append("bpy.ops.object.select_all(action='SELECT')\n");
@@ -121,7 +123,7 @@ public class PromptInterpreter {
                 defaultBpyScript.append("mat_water = bpy.data.materials.new(name='Cyan_Water')\n");
                 defaultBpyScript.append("mat_water.use_nodes = True\n");
                 defaultBpyScript.append("bsdf = mat_water.node_tree.nodes.get('Principled BSDF')\n");
-                defaultBpyScript.append("if bsdf:\n");
+                defaultBpyScript.append("if bsdf is not None:\n");
                 defaultBpyScript.append("    bsdf.inputs['Base Color'].default_value = (0.0, 0.7, 0.9, 0.8)\n");
                 defaultBpyScript.append("    bsdf.inputs['Roughness'].default_value = 0.05\n");
                 defaultBpyScript.append("water.data.materials.append(mat_water)\n\n");
@@ -143,17 +145,19 @@ public class PromptInterpreter {
                 defaultBpyScript.append("mod.width = 0.08\n\n");
 
                 defaultBpyScript.append("# Seat Cushions\n");
-                defaultBpyScript.append("for i in [-0.6, 0.6]:\n");
-                defaultBpyScript.append("    bpy.ops.mesh.primitive_cube_add(size=1, location=(i, 0.1, 0.45))\n");
+                defaultBpyScript.append("cushion_positions = [-0.6, 0.6]\n");
+                defaultBpyScript.append("for pos_x in cushion_positions:\n");
+                defaultBpyScript.append("    bpy.ops.mesh.primitive_cube_add(size=1, location=(pos_x, 0.1, 0.45))\n");
                 defaultBpyScript.append("    cushion = bpy.context.active_object\n");
-                defaultBpyScript.append("    cushion.name = f'Cushion_{i}'\n");
+                defaultBpyScript.append("    cushion.name = 'Cushion_' + str(pos_x)\n");
                 defaultBpyScript.append("    cushion.scale = (1.1, 0.8, 0.25)\n");
                 defaultBpyScript.append("    c_mod = cushion.modifiers.new('Bevel', 'BEVEL')\n");
                 defaultBpyScript.append("    c_mod.width = 0.06\n\n");
 
                 defaultBpyScript.append("# Armrests\n");
-                defaultBpyScript.append("for side in [-1.25, 1.25]:\n");
-                defaultBpyScript.append("    bpy.ops.mesh.primitive_cube_add(size=1, location=(side, 0, 0.6))\n");
+                defaultBpyScript.append("arm_sides = [-1.25, 1.25]\n");
+                defaultBpyScript.append("for side_x in arm_sides:\n");
+                defaultBpyScript.append("    bpy.ops.mesh.primitive_cube_add(size=1, location=(side_x, 0, 0.6))\n");
                 defaultBpyScript.append("    arm = bpy.context.active_object\n");
                 defaultBpyScript.append("    arm.scale = (0.2, 1.0, 0.6)\n\n");
 
@@ -165,19 +169,24 @@ public class PromptInterpreter {
                 defaultBpyScript.append("sand.name = 'Sand_Terrain'\n\n");
 
                 defaultBpyScript.append("# Wooden Huts\n");
-                defaultBpyScript.append("for pos in [(-4, -2), (4, 1), (0, 5)]:\n");
-                defaultBpyScript.append("    # Hut Wall\n");
-                defaultBpyScript.append("    bpy.ops.mesh.primitive_cylinder_add(radius=1.8, depth=2.2, location=(pos[0], pos[1], 1.1))\n");
+                defaultBpyScript.append("hut_positions = [(-4, -2), (4, 1), (0, 5)]\n");
+                defaultBpyScript.append("for hx, hy in hut_positions:\n");
+                defaultBpyScript.append("    bpy.ops.mesh.primitive_cylinder_add(radius=1.8, depth=2.2, location=(hx, hy, 1.1))\n");
                 defaultBpyScript.append("    hut = bpy.context.active_object\n");
-                defaultBpyScript.append("    # Thatched Roof Cone\n");
-                defaultBpyScript.append("    bpy.ops.mesh.primitive_cone_add(radius1=2.4, depth=1.6, location=(pos[0], pos[1], 3.0))\n\n");
+                defaultBpyScript.append("    hut.name = 'Hut_Wall'\n");
+                defaultBpyScript.append("    bpy.ops.mesh.primitive_cone_add(radius1=2.4, depth=1.6, location=(hx, hy, 3.0))\n");
+                defaultBpyScript.append("    roof = bpy.context.active_object\n");
+                defaultBpyScript.append("    roof.name = 'Hut_Roof'\n\n");
 
                 defaultBpyScript.append("# Palm Trees\n");
-                defaultBpyScript.append("for tree_pos in [(-7, 3), (6, -4)]:\n");
-                defaultBpyScript.append("    bpy.ops.mesh.primitive_cylinder_add(radius=0.15, depth=4.0, location=(tree_pos[0], tree_pos[1], 2.0))\n");
+                defaultBpyScript.append("tree_positions = [(-7, 3), (6, -4)]\n");
+                defaultBpyScript.append("for tx, ty in tree_positions:\n");
+                defaultBpyScript.append("    bpy.ops.mesh.primitive_cylinder_add(radius=0.15, depth=4.0, location=(tx, ty, 2.0))\n");
                 defaultBpyScript.append("    trunk = bpy.context.active_object\n");
                 defaultBpyScript.append("    trunk.rotation_euler = (0.1, 0.1, 0)\n");
-                defaultBpyScript.append("    bpy.ops.mesh.primitive_ico_sphere_add(radius=1.2, location=(tree_pos[0]+0.3, tree_pos[1]+0.3, 4.2))\n\n");
+                defaultBpyScript.append("    bpy.ops.mesh.primitive_ico_sphere_add(radius=1.2, location=(tx + 0.3, ty + 0.3, 4.2))\n");
+                defaultBpyScript.append("    leaves = bpy.context.active_object\n");
+                defaultBpyScript.append("    leaves.name = 'Palm_Leaves'\n\n");
 
             } else {
                 defaultBpyScript.append("# --- General Procedural Structure ---\n");
