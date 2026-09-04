@@ -1,5 +1,6 @@
 package com.example.cloud;
 
+import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -58,13 +59,41 @@ public class GitHubWorkflowBridge {
         this.mainHandler = new Handler(Looper.getMainLooper());
     }
 
+    // --- Overloaded Context-Aware Methods (Auto-fetch Stored Token) ---
+
+    public void testConnection(Context context, String repository, ConnectionTestCallback callback) {
+        String token = GitHubOAuthService.getAccessToken(context);
+        testConnection(repository, token, callback);
+    }
+
+    public void dispatchGenerationWorkflow(Context context,
+                                           String repository,
+                                           String eventType,
+                                           String assetId,
+                                           String bpyScript,
+                                           WorkflowDispatchCallback callback) {
+        String token = GitHubOAuthService.getAccessToken(context);
+        dispatchGenerationWorkflow(repository, token, eventType, assetId, bpyScript, callback);
+    }
+
+    public void downloadWorkflowArtifact(Context context,
+                                         String repository,
+                                         String assetId,
+                                         File destinationFile,
+                                         ArtifactDownloadCallback callback) {
+        String token = GitHubOAuthService.getAccessToken(context);
+        downloadWorkflowArtifact(repository, token, assetId, destinationFile, callback);
+    }
+
+    // --- Standard Methods ---
+
     public void testConnection(String repository, String personalAccessToken, ConnectionTestCallback callback) {
         if (repository == null || repository.trim().isEmpty()) {
             callback.onError("Repository cannot be empty. Format: owner/repo");
             return;
         }
         if (personalAccessToken == null || personalAccessToken.trim().isEmpty()) {
-            callback.onError("GitHub Personal Access Token cannot be empty.");
+            callback.onError("GitHub Access Token is empty. Please sign in or provide a token.");
             return;
         }
 
