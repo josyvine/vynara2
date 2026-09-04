@@ -30,6 +30,8 @@ import okhttp3.ResponseBody;
 public class GitHubWorkflowBridge {
     private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
     private static final int DEFAULT_TIMEOUT_SECONDS = 60;
+    private static final long POLLING_INTERVAL_MS = 5000; // 5 seconds interval
+    private static final long MAX_POLLING_DURATION_MS = 300000; // 5 minutes timeout
 
     private final OkHttpClient httpClient;
     private final Handler mainHandler;
@@ -47,6 +49,13 @@ public class GitHubWorkflowBridge {
 
     public interface ConnectionTestCallback {
         void onSuccess(String repoFullName, boolean hasWorkflowAccess);
+        void onError(String errorMessage);
+    }
+
+    public interface WorkflowPollingCallback {
+        void onStatusUpdate(String status, String details);
+        void onProgress(int percentage, long bytesRead, long totalBytes);
+        void onSuccess(File downloadedFile);
         void onError(String errorMessage);
     }
 
@@ -83,6 +92,15 @@ public class GitHubWorkflowBridge {
                                          ArtifactDownloadCallback callback) {
         String token = GitHubOAuthService.getAccessToken(context);
         downloadWorkflowArtifact(repository, token, assetId, destinationFile, callback);
+    }
+
+    public void awaitWorkflowAndDownloadArtifact(Context context,
+                                                String repository,
+                                                String assetId,
+                                                File destinationFile,
+                                                WorkflowPollingCallback callback) {
+        String token = GitHubOAuthService.getAccessToken(context);
+        awaitWorkflowAndDownloadArtifact(repository, token, assetId, destinationFile, callback);
     }
 
     // --- Standard Methods ---
@@ -258,6 +276,115 @@ public class GitHubWorkflowBridge {
                 }
             }
         });
+    }
+
+    public void awaitWorkflowAndDownloadArtifact(String repository,
+                                                String personalAccessToken,
+                                                String assetId,
+                                                File destinationFile,
+                                                WorkflowPollingCallback callback) {
+        if (repository == null || repository.trim().isEmpty() || personalAccessToken == null || personalAccessToken.trim().isEmpty()) {
+            callback.onError("GitHub credentials are not properly configured.");
+            return;
+        }
+
+        long startTime = System.currentTimeMillis();
+        VynaraLogger.system("GitHubWorkflowBridge: Starting workflow execution monitoring for assetId: " + assetId);
+
+        Runnable pollRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (System.currentTimeMillis() - startTime > MAX_POLLING_DURATION_MS) {
+                    VynaraLogger.e("GitHubWorkflowBridge: Workflow execution timed out after " + (MAX_POLLING_DURATION_MS / 1000) + "s");
+                    mainHandler.post(() -> callback.onError("GitHub Actions workflow execution timed out."));
+                    return;
+                }
+
+                String runsUrl = "https://api.github.com/repos/" + repository.trim() + "/actions/runs?per_page=10";
+
+                Request request = new Request.Builder()
+                        .url(runsUrl)
+                        .header("Authorization", "Bearer " + personalAccessToken.trim())
+                        .header("Accept", "application/vnd.github+json")
+                        .header("User-Agent", "Vynara-3D-Studio-Android")
+                        .get()
+                        .build();
+
+                httpClient.newCall(request).enqueue(new Callback() {
+                    @Override
+                    public void onFailure(Call call, IOException e) {
+                        VynaraLogger.e("Workflow status check failed: " + e.getMessage());
+                        mainHandler.postDelayed(pollRunnable, POLLING_INTERVAL_MS);
+                    }
+
+                    @Override
+                    public void onResponse(Call call, Response response) throws IOException {
+                        try (ResponseBody responseBody = response.body()) {
+                            if (!response.isSuccessful() || responseBody == null) {
+                                VynaraLogger.e("Workflow runs query failed: HTTP " + response.code());
+                                mainHandler.postDelayed(pollRunnable, POLLING_INTERVAL_MS);
+                                return;
+                            }
+
+                            String json = responseBody.string();
+                            JSONObject root = new JSONObject(json);
+                            JSONArray runs = root.optJSONArray("workflow_runs");
+
+                            if (runs != null && runs.length() > 0) {
+                                JSONObject latestRun = runs.getJSONObject(0);
+                                String status = latestRun.optString("status", "unknown");
+                                String conclusion = latestRun.optString("conclusion", "null");
+                                long runId = latestRun.optLong("id", 0);
+
+                                VynaraLogger.system("GitHubWorkflowBridge: Run #" + runId + " Status: " + status + " Conclusion: " + conclusion);
+                                mainHandler.post(() -> callback.onStatusUpdate(status, "Run #" + runId + " [" + status + "]"));
+
+                                if ("completed".equalsIgnoreCase(status)) {
+                                    if ("success".equalsIgnoreCase(conclusion)) {
+                                        VynaraLogger.system("GitHubWorkflowBridge: Workflow run #" + runId + " succeeded! Downloading artifact...");
+                                        mainHandler.post(() -> callback.onStatusUpdate("downloading", "Downloading GLB artifact..."));
+
+                                        downloadWorkflowArtifact(repository, personalAccessToken, assetId, destinationFile, new ArtifactDownloadCallback() {
+                                            @Override
+                                            public void onProgress(int percentage, long bytesRead, long totalBytes) {
+                                                callback.onProgress(percentage, bytesRead, totalBytes);
+                                            }
+
+                                            @Override
+                                            public void onSuccess(File downloadedFile) {
+                                                VynaraLogger.system("GitHubWorkflowBridge: GLB downloaded and extracted successfully: " + downloadedFile.getAbsolutePath());
+                                                callback.onSuccess(downloadedFile);
+                                            }
+
+                                            @Override
+                                            public void onError(String errorMessage) {
+                                                VynaraLogger.e("GitHubWorkflowBridge: Artifact download failed: " + errorMessage);
+                                                callback.onError(errorMessage);
+                                            }
+                                        });
+                                        return;
+                                    } else {
+                                        String failureMsg = "GitHub Workflow Run #" + runId + " failed with conclusion: " + conclusion;
+                                        VynaraLogger.e(failureMsg);
+                                        mainHandler.post(() -> callback.onError(failureMsg));
+                                        return;
+                                    }
+                                }
+                            }
+
+                            // Still queued or in progress, schedule next poll
+                            mainHandler.postDelayed(pollRunnable, POLLING_INTERVAL_MS);
+
+                        } catch (Exception ex) {
+                            VynaraLogger.e("Error parsing workflow status: " + ex.getMessage(), ex);
+                            mainHandler.postDelayed(pollRunnable, POLLING_INTERVAL_MS);
+                        }
+                    }
+                });
+            }
+        };
+
+        mainHandler.post(pollRunnable);
     }
 
     private void executeBinaryDownload(String downloadUrl,
