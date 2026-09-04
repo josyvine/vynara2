@@ -89,13 +89,19 @@ public class AIOrchestrator {
         CloudProvider activeProvider = apiKeyManager.getComputeProvider();
         String providerContext = "ACTIVE COMPUTE PIPELINE: " + activeProvider.getDisplayName() + "\n";
 
-        String systemInstruction = "You are Vynara Autonomous 3D AI Artist, acting as the creative director and technical planner.\n" +
+        String systemInstruction = "You are Vynara Autonomous 3D Master Technical Director & Architectural Planner.\n" +
                 "KNOWLEDGE vs. CAPABILITY vs. TOOL vs. TASK CONTRACT:\n" +
                 "- Knowledge describes construction rules and facts. Capabilities describe what the system knows how to do.\n" +
                 "- Tools are the ONLY executable operations. Tasks are concrete operations in the production plan.\n" +
                 "- You may reason using knowledge and capabilities, but you may execute ONLY registered tools.\n" +
                 "- When Cloud Workers (GitHub Actions / Hugging Face) are enabled or Target Engine is BLENDER_NATIVE, select `blender.cloud_generate` or `rig.auto_rig_cloud` as the primary geometry tool.\n" +
-                "- CRITICAL FOR BLENDER CLOUD GENERATION: In any `bpyScript` parameter provided for `blender.cloud_generate`, you MUST ensure the script imports `os`, creates the output directory `import os; os.makedirs('output', exist_ok=True)`, constructs the 3D mesh, and ends with `bpy.ops.export_scene.gltf(filepath='output/model.glb', export_format='GLB')`.\n" +
+                "- CRITICAL REQUIREMENTS FOR BLENDER PYTHON (`bpyScript` parameter in `blender.cloud_generate`):\n" +
+                "  1. NEVER generate a single primitive cube or plain placeholder box.\n" +
+                "  2. Write comprehensive, multi-object procedural Blender 4.x Python code that builds the ENTIRE requested scene in full detail.\n" +
+                "  3. For villas/architecture: construct foundation slabs, wall extrusions, glass windows (`Principled BSDF` transmission), door frames, wooden decks, swimming pool basins with cyan water materials, and ambient sunlight.\n" +
+                "  4. For furniture/vehicles: construct multi-part geometry with Bevel & Solidify modifiers, distinct PBR materials (metallic, leather, wood, fabric), and smooth shading.\n" +
+                "  5. ALWAYS import `os`, create output directory `import os; os.makedirs('output', exist_ok=True)`, and export the final 3D scene directly using:\n" +
+                "     `bpy.ops.export_scene.gltf(filepath='output/model.glb', export_format='GLB')`\n" +
                 "- Choose your commands strictly from the provided Authoritative Registered Commands manifest. Never invent Tool IDs.\n\n" +
                 providerContext + "\n" +
                 toolManifestBuilder.toString() + "\n\n" +
@@ -157,13 +163,16 @@ public class AIOrchestrator {
             return;
         }
 
-        String blenderSystemInstruction = "You are Vynara Blender Script Generator. Generate standalone executable Python code for Blender 4.x (`bpy`).\n" +
-                "REQUIREMENTS:\n" +
-                "1. Clean default scene (delete default cube/light/camera if required).\n" +
-                "2. Create realistic 3D mesh geometry, materials, and lighting matching the user prompt.\n" +
-                "3. CRITICAL MANDATORY STEP: Import `os`, create output directory `import os; os.makedirs('output', exist_ok=True)`, and export the final 3D scene directly to GLB format using:\n" +
+        String blenderSystemInstruction = "You are Vynara Master 3D Technical Director & Blender Python (`bpy`) Expert.\n" +
+                "REQUIREMENTS FOR BLENDER SCRIPT GENERATION:\n" +
+                "1. Clean default scene (delete default cube/light/camera).\n" +
+                "2. NEVER output a single primitive cube or plain box placeholder.\n" +
+                "3. Construct detailed, multi-component, photorealistic 3D models using `bpy.ops.mesh` and `bpy.data` objects.\n" +
+                "4. For architectural prompts (villa, house, pool, village): build foundation slabs, exterior walls, window panes with glass transmission, roof structures, pool cutouts with blue water material, wooden decks, and lighting.\n" +
+                "5. For furniture/vehicles: construct multi-element models with Bevel modifiers, smooth shading, distinct material slots (metallic, leather, wood, fabric).\n" +
+                "6. CRITICAL MANDATORY STEP: Import `os`, create output directory `import os; os.makedirs('output', exist_ok=True)`, and export the final 3D scene directly to GLB format using:\n" +
                 "   `bpy.ops.export_scene.gltf(filepath='output/model.glb', export_format='GLB')`\n" +
-                "4. Return ONLY valid Python code without Markdown formatting backticks.";
+                "7. Return ONLY valid executable Python code without Markdown formatting backticks.";
 
         VynaraLogger.system("Generating Blender Python execution script via Gemini...");
         apiClient.generateBlenderScript(apiKeyManager.getApiKey(), apiKeyManager.getSelectedModel(), prompt + "\n" + blenderSystemInstruction, new GeminiApiClient.ApiCallback<String>() {
