@@ -81,6 +81,9 @@ public class StudioGLRenderer implements GLSurfaceView.Renderer {
             "uniform float uIsWater;\n" +
             "void main() {\n" +
             "    vec3 norm = normalize(vNormal);\n" +
+            "    if (!gl_FrontFacing) {\n" +
+            "        norm = -norm;\n" +
+            "    }\n" +
             "    vec3 viewDir = normalize(uCameraPos - vFragPos);\n" +
             "    \n" +
             "    // Dynamic procedural water wave calculations\n" +
@@ -93,8 +96,8 @@ public class StudioGLRenderer implements GLSurfaceView.Renderer {
             "    vec3 lightDir = normalize(uLightPos - vFragPos);\n" +
             "    vec3 halfDir = normalize(lightDir + viewDir);\n" +
             "    \n" +
-            "    // Diffuse Reflection\n" +
-            "    float diff = max(dot(norm, lightDir), 0.0);\n" +
+            "    // Diffuse Reflection with soft wrap\n" +
+            "    float diff = max(dot(norm, lightDir), 0.0) + 0.15 * max(dot(-norm, lightDir), 0.0);\n" +
             "    vec3 diffuse = diff * uLightColor;\n" +
             "    \n" +
             "    // Specular Reflection (Cook-Torrance Approximation)\n" +
@@ -132,7 +135,7 @@ public class StudioGLRenderer implements GLSurfaceView.Renderer {
     }
 
     private void initGridBuffer() {
-        int gridSize = 12;
+        int gridSize = 24;
         float[] gridVertices = new float[(gridSize * 2 + 1) * 4 * 3];
         int idx = 0;
         for (int i = -gridSize; i <= gridSize; i++) {
@@ -291,6 +294,7 @@ public class StudioGLRenderer implements GLSurfaceView.Renderer {
         GLES20.glUniform1f(uRoughnessHandle, 1.0f);
         GLES20.glUniform4f(uEmissionHandle, 0f, 0f, 0f, 0f);
         GLES20.glUniform1f(uIsSelectedHandle, 0.0f);
+        GLES20.glUniform1f(uIsWaterHandle, 0.0f);
 
         GLES20.glEnableVertexAttribArray(aPositionHandle);
         GLES20.glVertexAttribPointer(aPositionHandle, 3, GLES20.GL_FLOAT, false, 0, gridBuffer);
@@ -322,8 +326,10 @@ public class StudioGLRenderer implements GLSurfaceView.Renderer {
             float[] emissiveRGB = mat.getEmissionRGB();
             GLES20.glUniform4f(uEmissionHandle, emissiveRGB[0], emissiveRGB[1], emissiveRGB[2], mat.getEmissionIntensity());
 
-            // Instruct shader if current mesh has the dedicated pool water material
-            if ("mat_pool_water".equalsIgnoreCase(mat.getId())) {
+            // Broad check: activate wave simulation for any water, pool, or ocean material
+            String matId = mat.getId() != null ? mat.getId().toLowerCase() : "";
+            String matName = mat.getName() != null ? mat.getName().toLowerCase() : "";
+            if (matId.contains("water") || matId.contains("ocean") || matName.contains("water") || matName.contains("ocean")) {
                 isWater = 1.0f;
             }
         } else {
