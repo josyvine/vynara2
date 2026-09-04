@@ -307,7 +307,9 @@ public class ToolExecutor {
                                 }
                                 for (Character ch : result.getCharacters()) {
                                     characterManager.registerCharacter(ch);
-                                    engine.getSceneManager().getActiveScene().addObject(new SceneObject(ch.getName(), ch.getMesh()));
+                                    if (ch.getRootObject() != null) {
+                                        engine.getSceneManager().getActiveScene().addObject(ch.getRootObject());
+                                    }
                                 }
                                 engine.getSceneManager().updateWorldTransforms();
                                 success.set(true);
@@ -390,7 +392,9 @@ public class ToolExecutor {
                                     Character riggedChar = result.getCharacters().get(0);
                                     characterManager.registerCharacter(riggedChar);
                                     engine.getSceneManager().getActiveScene().removeObject(target.getId());
-                                    engine.getSceneManager().getActiveScene().addObject(new SceneObject(riggedChar.getName(), riggedChar.getMesh()));
+                                    if (riggedChar.getRootObject() != null) {
+                                        engine.getSceneManager().getActiveScene().addObject(riggedChar.getRootObject());
+                                    }
                                     engine.getSceneManager().updateWorldTransforms();
                                     success.set(true);
                                 }
@@ -443,9 +447,10 @@ public class ToolExecutor {
                             }
                             for (Character ch : result.getCharacters()) {
                                 characterManager.registerCharacter(ch);
-                                SceneObject charObj = new SceneObject(ch.getName(), ch.getMesh());
-                                charObj.getTransform().setPosition(px, py, pz);
-                                engine.getSceneManager().getActiveScene().addObject(charObj);
+                                if (ch.getRootObject() != null) {
+                                    ch.getRootObject().getTransform().setPosition(px, py, pz);
+                                    engine.getSceneManager().getActiveScene().addObject(ch.getRootObject());
+                                }
                             }
                             engine.getSceneManager().updateWorldTransforms();
                             success.set(true);
