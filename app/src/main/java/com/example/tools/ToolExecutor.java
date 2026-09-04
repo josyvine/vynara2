@@ -318,7 +318,11 @@ public class ToolExecutor {
                 final String targetRepo = repo;
                 final String targetPat = pat;
 
-                File outputGlb = new File(ProjectRuntime.getInstance().getContext().getFilesDir(), "models_cache/" + assetId + ".glb");
+                File modelsDir = new File(ProjectRuntime.getInstance().getContext().getFilesDir(), "models_cache");
+                if (!modelsDir.exists()) {
+                    modelsDir.mkdirs();
+                }
+                File outputGlb = new File(modelsDir, assetId + ".glb");
                 final CountDownLatch latch = new CountDownLatch(1);
                 final AtomicBoolean success = new AtomicBoolean(false);
 
@@ -357,12 +361,49 @@ public class ToolExecutor {
                     });
                 } else {
                     GitHubWorkflowBridge ghBridge = new GitHubWorkflowBridge();
+                    VynaraLogger.system("GitHubWorkflowBridge: Triggering workflow dispatch for " + targetRepo);
                     ghBridge.dispatchGenerationWorkflow(targetRepo, targetPat, "vynara_generate", assetId, bpyScript, new GitHubWorkflowBridge.WorkflowDispatchCallback() {
                         @Override
                         public void onDispatched(String eventType, String aId) {
-                            VynaraLogger.system("GitHub generation workflow dispatched successfully to " + targetRepo);
-                            success.set(true);
-                            latch.countDown();
+                            VynaraLogger.system("GitHub generation workflow dispatched successfully to " + targetRepo + ". Monitoring run progress...");
+                            
+                            ghBridge.awaitWorkflowAndDownloadArtifact(targetRepo, targetPat, assetId, outputGlb, new GitHubWorkflowBridge.WorkflowPollingCallback() {
+                                @Override
+                                public void onStatusUpdate(String status, String details) {
+                                    VynaraLogger.system("GitHub Action Execution: " + details);
+                                }
+
+                                @Override
+                                public void onProgress(int percentage, long bytesRead, long totalBytes) {
+                                    VynaraLogger.system("Downloading GLB Artifact: " + percentage + "% (" + bytesRead + "/" + totalBytes + " bytes)");
+                                }
+
+                                @Override
+                                public void onSuccess(File downloadedGlbFile) {
+                                    try {
+                                        VynaraLogger.system("Importing downloaded GLB into 3D scene engine...");
+                                        GLTFImporter.ImportResult result = GLTFImporter.loadFromFile(downloadedGlbFile);
+                                        for (SceneObject obj : result.getSceneObjects()) {
+                                            engine.getSceneManager().getActiveScene().addObject(obj);
+                                        }
+                                        for (Character ch : result.getCharacters()) {
+                                            characterManager.registerCharacter(ch);
+                                        }
+                                        engine.getSceneManager().updateWorldTransforms();
+                                        success.set(true);
+                                    } catch (Exception ex) {
+                                        VynaraLogger.e("Failed to import downloaded GLB into active scene", ex);
+                                    } finally {
+                                        latch.countDown();
+                                    }
+                                }
+
+                                @Override
+                                public void onError(String errorMessage) {
+                                    VynaraLogger.e("GitHub Actions workflow pipeline failed: " + errorMessage);
+                                    latch.countDown();
+                                }
+                            });
                         }
 
                         @Override
@@ -374,7 +415,7 @@ public class ToolExecutor {
                 }
 
                 try {
-                    latch.await(60, TimeUnit.SECONDS);
+                    latch.await(300, TimeUnit.SECONDS); // Block for up to 5 minutes to allow Blender GitHub worker to finish
                 } catch (InterruptedException ignored) {}
 
                 return success.get();
