@@ -5,7 +5,9 @@ import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Base64;
 
+import com.example.ai.ApiKeyManager;
 import com.example.cloud.models.DeviceCodeResponse;
 import com.example.utils.VynaraLogger;
 
@@ -20,8 +22,10 @@ import java.util.concurrent.TimeUnit;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.FormBody;
+import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
+import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
 
@@ -42,6 +46,48 @@ public class GitHubOAuthService {
     private static final String KEY_USER_LOGIN = "github_user_login";
     private static final String KEY_USER_NAME = "github_user_name";
     private static final String KEY_AVATAR_URL = "github_avatar_url";
+
+    private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
+
+    private static final String WORKFLOW_YAML_CONTENT =
+            "name: Vynara Blender Worker\n" +
+            "\n" +
+            "on:\n" +
+            "  repository_dispatch:\n" +
+            "    types: [vynara_generate]\n" +
+            "\n" +
+            "jobs:\n" +
+            "  build_3d_asset:\n" +
+            "    runs-on: ubuntu-latest\n" +
+            "\n" +
+            "    steps:\n" +
+            "      - name: Checkout Code\n" +
+            "        uses: actions/checkout@v4\n" +
+            "\n" +
+            "      - name: Restore Blender Cache\n" +
+            "        id: blender-cache\n" +
+            "        uses: actions/cache@v4\n" +
+            "        with:\n" +
+            "          path: /opt/blender\n" +
+            "          key: blender-4.2-linux-x64\n" +
+            "\n" +
+            "      - name: Download Blender Binary\n" +
+            "        if: steps.blender-cache.outputs.cache-hit != 'true'\n" +
+            "        run: |\n" +
+            "          sudo mkdir -p /opt/blender\n" +
+            "          curl -sL https://download.blender.org/release/Blender4.2/blender-4.2.0-linux-x64.tar.xz | sudo tar -xJ --strip-components=1 -C /opt/blender\n" +
+            "\n" +
+            "      - name: Execute Blender Python Script\n" +
+            "        run: |\n" +
+            "          mkdir -p output\n" +
+            "          echo \"${{ github.event.client_payload.bpy_script }}\" > run_task.py\n" +
+            "          /opt/blender/blender -b -P run_task.py -- output/model.glb\n" +
+            "\n" +
+            "      - name: Upload Finished Model\n" +
+            "        uses: actions/upload-artifact@v4\n" +
+            "        with:\n" +
+            "          name: ${{ github.event.client_payload.asset_id }}\n" +
+            "          path: output/model.glb\n";
 
     private final OkHttpClient httpClient;
     private final Handler mainHandler;
@@ -70,6 +116,11 @@ public class GitHubOAuthService {
 
     public interface UserReposCallback {
         void onSuccess(List<String> repoFullNames);
+        void onError(String errorMessage);
+    }
+
+    public interface ProvisionCallback {
+        void onSuccess(String repoFullName);
         void onError(String errorMessage);
     }
 
@@ -533,5 +584,180 @@ public class GitHubOAuthService {
                 }
             }
         });
+    }
+
+    // --- Method 2: Automatic Background Workspace & Workflow Provisioning ---
+
+    public void provisionUserWorkspace(Context context, String accessToken, String userLogin, ProvisionCallback callback) {
+        if (accessToken == null || accessToken.trim().isEmpty() || userLogin == null || userLogin.trim().isEmpty()) {
+            callback.onError("Invalid credentials for provisioning.");
+            return;
+        }
+
+        final String repoFullName = userLogin.trim() + "/vynara2";
+        final String repoCheckUrl = "https://api.github.com/repos/" + repoFullName;
+
+        VynaraLogger.system("GitHubOAuthService: Checking if repository " + repoFullName + " exists...");
+
+        Request checkRequest = new Request.Builder()
+                .url(repoCheckUrl)
+                .header("Authorization", "Bearer " + accessToken.trim())
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "Vynara-3D-Studio-Android")
+                .get()
+                .build();
+
+        httpClient.newCall(checkRequest).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                mainHandler.post(() -> callback.onError("Repo check failed: " + e.getMessage()));
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                if (response.isSuccessful()) {
+                    response.close();
+                    VynaraLogger.system("GitHubOAuthService: Repo " + repoFullName + " exists. Checking workflow file...");
+                    checkAndCommitWorkflow(context, accessToken, userLogin, repoFullName, callback);
+                } else if (response.code() == 404) {
+                    response.close();
+                    VynaraLogger.system("GitHubOAuthService: Repo " + repoFullName + " missing. Creating private repository...");
+                    createPrivateRepo(context, accessToken, userLogin, repoFullName, callback);
+                } else {
+                    int status = response.code();
+                    response.close();
+                    mainHandler.post(() -> callback.onError("GitHub API returned HTTP " + status + " during repo check"));
+                }
+            }
+        });
+    }
+
+    private void createPrivateRepo(Context context, String accessToken, String userLogin, String repoFullName, ProvisionCallback callback) {
+        try {
+            JSONObject json = new JSONObject();
+            json.put("name", "vynara2");
+            json.put("description", "Vynara 3D Studio Cloud Render Workspace");
+            json.put("private", true);
+            json.put("auto_init", true);
+
+            RequestBody body = RequestBody.create(json.toString(), JSON_MEDIA_TYPE);
+
+            Request request = new Request.Builder()
+                    .url("https://api.github.com/user/repos")
+            .header("Authorization", "Bearer " + accessToken.trim())
+                    .header("Accept", "application/vnd.github+json")
+                    .header("User-Agent", "Vynara-3D-Studio-Android")
+                    .post(body)
+                    .build();
+
+            httpClient.newCall(request).enqueue(new Callback() {
+                @Override
+                public void onFailure(Call call, IOException e) {
+                    mainHandler.post(() -> callback.onError("Failed to create private repo: " + e.getMessage()));
+                }
+
+                @Override
+                public void onResponse(Call call, Response response) throws IOException {
+                    if (response.isSuccessful() || response.code() == 201) {
+                        response.close();
+                        VynaraLogger.system("GitHubOAuthService: Private repository created successfully. Waiting for init...");
+                        mainHandler.postDelayed(() -> checkAndCommitWorkflow(context, accessToken, userLogin, repoFullName, callback), 2000);
+                    } else {
+                        int code = response.code();
+                        response.close();
+                        mainHandler.post(() -> callback.onError("GitHub returned HTTP " + code + " creating repository"));
+                    }
+                }
+            });
+        } catch (Exception e) {
+            callback.onError("JSON creation error: " + e.getMessage());
+        }
+    }
+
+    private void checkAndCommitWorkflow(Context context, String accessToken, String userLogin, String repoFullName, ProvisionCallback callback) {
+        String workflowCheckUrl = "https://api.github.com/repos/" + repoFullName + "/contents/.github/workflows/vynara_worker.yml";
+
+        Request request = new Request.Builder()
+                .url(workflowCheckUrl)
+                .header("Authorization", "Bearer " + accessToken.trim())
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "Vynara-3D-Studio-Android")
+                .get()
+                .build();
+
+        httpClient.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                commitWorkflowFile(context, accessToken, repoFullName, callback);
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                if (response.isSuccessful()) {
+                    response.close();
+                    VynaraLogger.system("GitHubOAuthService: Workflow file already exists in " + repoFullName);
+                    saveAndFinishProvisioning(context, accessToken, userLogin, repoFullName, callback);
+                } else {
+                    response.close();
+                    VynaraLogger.system("GitHubOAuthService: Workflow file missing. Pushing vynara_worker.yml...");
+                    commitWorkflowFile(context, accessToken, repoFullName, callback);
+                }
+            }
+        });
+    }
+
+    private void commitWorkflowFile(Context context, String accessToken, String repoFullName, ProvisionCallback callback) {
+        try {
+            String encodedYaml = Base64.encodeToString(WORKFLOW_YAML_CONTENT.getBytes(), Base64.NO_WRAP);
+
+            JSONObject json = new JSONObject();
+            json.put("message", "Initialize Vynara Blender worker workflow");
+            json.put("content", encodedYaml);
+            json.put("branch", "main");
+
+            RequestBody body = RequestBody.create(json.toString(), JSON_MEDIA_TYPE);
+
+            String putUrl = "https://api.github.com/repos/" + repoFullName + "/contents/.github/workflows/vynara_worker.yml";
+
+            Request request = new Request.Builder()
+                    .url(putUrl)
+                    .header("Authorization", "Bearer " + accessToken.trim())
+                    .header("Accept", "application/vnd.github+json")
+                    .header("User-Agent", "Vynara-3D-Studio-Android")
+                    .put(body)
+                    .build();
+
+            httpClient.newCall(request).enqueue(new Callback() {
+                @Override
+                public void onFailure(Call call, IOException e) {
+                    mainHandler.post(() -> callback.onError("Failed to push workflow file: " + e.getMessage()));
+                }
+
+                @Override
+                public void onResponse(Call call, Response response) throws IOException {
+                    int code = response.code();
+                    response.close();
+                    if (code == 200 || code == 201) {
+                        VynaraLogger.system("GitHubOAuthService: Workflow file successfully committed to " + repoFullName);
+                        saveAndFinishProvisioning(context, accessToken, repoFullName.split("/")[0], repoFullName, callback);
+                    } else {
+                        mainHandler.post(() -> callback.onError("GitHub returned HTTP " + code + " committing workflow"));
+                    }
+                }
+            });
+        } catch (Exception e) {
+            callback.onError("Error assembling workflow payload: " + e.getMessage());
+        }
+    }
+
+    private void saveAndFinishProvisioning(Context context, String accessToken, String userLogin, String repoFullName, ProvisionCallback callback) {
+        if (context != null) {
+            ApiKeyManager keyMgr = new ApiKeyManager(context);
+            keyMgr.saveGitHubUser(userLogin, getAvatarUrl(context));
+            keyMgr.saveGitHubConfig(repoFullName, accessToken, "vynara_generate");
+            keyMgr.saveComputeProvider(CloudProvider.GITHUB_ACTIONS);
+        }
+
+        mainHandler.post(() -> callback.onSuccess(repoFullName));
     }
 }
