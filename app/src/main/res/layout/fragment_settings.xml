@@ -195,7 +195,7 @@
                     android:layout_marginTop="4dp"
                     android:background="@color/bg_input" />
 
-                <!-- GitHub Actions Section -->
+                <!-- GITHUB ACTIONS (OAUTH & BYOC) SECTION -->
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
@@ -205,11 +205,72 @@
                     android:textSize="13sp"
                     android:textStyle="bold" />
 
+                <!-- Logged Out State: OAuth & Device Login Buttons -->
+                <LinearLayout
+                    android:id="@+id/layout_github_logged_out"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="vertical">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_github_login"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="44dp"
+                        android:text="Sign in with GitHub"
+                        android:textColor="@color/primary"
+                        android:textSize="12sp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_github_device_login"
+                        style="@style/Widget.Material3.Button.OutlinedButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="44dp"
+                        android:layout_marginTop="6dp"
+                        android:text="Device Code Sign-In"
+                        android:textColor="@color/text_primary"
+                        android:textSize="12sp"
+                        app:strokeColor="@color/border_dark" />
+                </LinearLayout>
+
+                <!-- Logged In State: User info & Logout -->
+                <LinearLayout
+                    android:id="@+id/layout_github_logged_in"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/tv_github_user"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Signed in as @user"
+                        android:textColor="@color/status_success"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_github_logout"
+                        style="@style/Widget.Material3.Button.OutlinedButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="38dp"
+                        android:text="Sign Out"
+                        android:textColor="#FF5252"
+                        android:textSize="11sp"
+                        app:strokeColor="#FF5252" />
+                </LinearLayout>
+
+                <!-- Target Repository Input -->
                 <EditText
                     android:id="@+id/et_github_repo"
                     android:layout_width="match_parent"
                     android:layout_height="44dp"
-                    android:layout_marginTop="6dp"
+                    android:layout_marginTop="10dp"
                     android:background="@color/bg_input"
                     android:hint="Repository (e.g. username/vynara-runner)"
                     android:paddingHorizontal="12dp"
@@ -217,6 +278,7 @@
                     android:textColorHint="@color/text_muted"
                     android:textSize="13sp" />
 
+                <!-- Manual Personal Access Token (Fallback) -->
                 <EditText
                     android:id="@+id/et_github_pat"
                     android:layout_width="match_parent"
@@ -260,7 +322,7 @@
                         app:strokeColor="@color/border_dark" />
                 </LinearLayout>
 
-                <!-- Hugging Face Space Section -->
+                <!-- HUGGING FACE SPACE SECTION -->
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
