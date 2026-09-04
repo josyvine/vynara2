@@ -4,6 +4,7 @@ import android.content.Context;
 
 import com.example.ai.protocol.AIProductionRequest;
 import com.example.character.CharacterManager;
+import com.example.cloud.CloudProvider;
 import com.example.engine.ThreeDEngine;
 import com.example.knowledge.KnowledgeManager;
 import com.example.runtime.ProjectRuntime;
@@ -35,7 +36,7 @@ public class AIProductionController {
 
     public AIProductionController(Context context) {
         this.context = context.getApplicationContext();
-        // Phase 1 Alignment: Connect to the unified ProjectRuntime instance to eliminate split engine instances
+        // Connect to the unified ProjectRuntime instance to eliminate split engine instances
         this.runtime = ProjectRuntime.getInstance(this.context);
         this.apiKeyManager = new ApiKeyManager(this.context);
         this.apiClient = new GeminiApiClient();
@@ -57,6 +58,9 @@ public class AIProductionController {
     }
 
     public ProductionPlan generatePlan(String userPrompt, String style, String engine, List<String> referenceImageUris) {
+        if (engine != null && (engine.toLowerCase().contains("blender") || engine.toLowerCase().contains("cloud"))) {
+            apiKeyManager.saveComputeProvider(CloudProvider.GITHUB_ACTIONS);
+        }
         currentPlan = orchestrator.planProduction(userPrompt, style, engine, referenceImageUris);
         return currentPlan;
     }
@@ -67,6 +71,11 @@ public class AIProductionController {
      */
     public void generatePlanWithGemini(String userPrompt, String style, String engine, List<String> referenceImageUris, final GeminiApiClient.ApiCallback<ProductionPlan> callback) {
         if (callback == null) return;
+
+        // Force GitHub Actions compute provider if Blender Native target engine is selected
+        if (engine != null && (engine.toLowerCase().contains("blender") || engine.toLowerCase().contains("cloud"))) {
+            apiKeyManager.saveComputeProvider(CloudProvider.GITHUB_ACTIONS);
+        }
 
         AIProductionRequest request = new AIProductionRequest(userPrompt, style, engine);
         if (referenceImageUris != null) {
@@ -92,7 +101,7 @@ public class AIProductionController {
 
     public void executeCurrentPlan(ExecutionEngine.ExecutionCallback callback) {
         if (currentPlan != null && currentPlan.getTaskGraph() != null) {
-            // Phase 13 Alignment: Begin scene transaction for undo/redo rollback capability
+            // Begin scene transaction for undo/redo rollback capability
             runtime.getTransactionManager().beginTransaction("Execute AI Plan: " + currentPlan.getProjectName());
             
             executionEngine.executeGraph(currentPlan.getTaskGraph(), new ExecutionEngine.ExecutionCallback() {
