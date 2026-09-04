@@ -1,5 +1,7 @@
 package com.example.cloud;
 
+import android.content.Context;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
@@ -18,10 +20,8 @@ import java.util.concurrent.TimeUnit;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.FormBody;
-import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
-import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
 
@@ -34,6 +34,14 @@ public class GitHubOAuthService {
 
     public static final String DEFAULT_REDIRECT_URI = "vynara://oauth-callback";
     public static final String DEFAULT_SCOPES = "repo,workflow,user";
+
+    private static final String PREFS_NAME = "vynara_github_auth_prefs";
+    private static final String KEY_CLIENT_ID = "github_client_id";
+    private static final String KEY_CLIENT_SECRET = "github_client_secret";
+    private static final String KEY_ACCESS_TOKEN = "github_access_token";
+    private static final String KEY_USER_LOGIN = "github_user_login";
+    private static final String KEY_USER_NAME = "github_user_name";
+    private static final String KEY_AVATAR_URL = "github_avatar_url";
 
     private final OkHttpClient httpClient;
     private final Handler mainHandler;
@@ -73,6 +81,89 @@ public class GitHubOAuthService {
                 .build();
         this.mainHandler = new Handler(Looper.getMainLooper());
     }
+
+    // --- SharedPreferences Helpers for Credential & Token Storage ---
+
+    public static void saveOAuthCredentials(Context context, String clientId, String clientSecret) {
+        if (context == null) return;
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        prefs.edit()
+                .putString(KEY_CLIENT_ID, clientId != null ? clientId.trim() : "")
+                .putString(KEY_CLIENT_SECRET, clientSecret != null ? clientSecret.trim() : "")
+                .apply();
+    }
+
+    public static String getClientId(Context context) {
+        if (context == null) return "";
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        return prefs.getString(KEY_CLIENT_ID, "");
+    }
+
+    public static String getClientSecret(Context context) {
+        if (context == null) return "";
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        return prefs.getString(KEY_CLIENT_SECRET, "");
+    }
+
+    public static void saveAccessToken(Context context, String token) {
+        if (context == null) return;
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        prefs.edit()
+                .putString(KEY_ACCESS_TOKEN, token != null ? token.trim() : "")
+                .apply();
+    }
+
+    public static String getAccessToken(Context context) {
+        if (context == null) return "";
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        return prefs.getString(KEY_ACCESS_TOKEN, "");
+    }
+
+    public static void saveUserProfile(Context context, String login, String name, String avatarUrl) {
+        if (context == null) return;
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        prefs.edit()
+                .putString(KEY_USER_LOGIN, login != null ? login.trim() : "")
+                .putString(KEY_USER_NAME, name != null ? name.trim() : "")
+                .putString(KEY_AVATAR_URL, avatarUrl != null ? avatarUrl.trim() : "")
+                .apply();
+    }
+
+    public static String getUserLogin(Context context) {
+        if (context == null) return "";
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        return prefs.getString(KEY_USER_LOGIN, "");
+    }
+
+    public static String getUserName(Context context) {
+        if (context == null) return "";
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        return prefs.getString(KEY_USER_NAME, "");
+    }
+
+    public static String getAvatarUrl(Context context) {
+        if (context == null) return "";
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        return prefs.getString(KEY_AVATAR_URL, "");
+    }
+
+    public static boolean isLoggedIn(Context context) {
+        String token = getAccessToken(context);
+        return token != null && !token.trim().isEmpty();
+    }
+
+    public static void clearAuth(Context context) {
+        if (context == null) return;
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        prefs.edit()
+                .remove(KEY_ACCESS_TOKEN)
+                .remove(KEY_USER_LOGIN)
+                .remove(KEY_USER_NAME)
+                .remove(KEY_AVATAR_URL)
+                .apply();
+    }
+
+    // --- Web OAuth Methods ---
 
     public static String buildWebAuthorizeUrl(String clientId, String redirectUri, String state) {
         Uri.Builder builder = Uri.parse(OAUTH_AUTHORIZE_URL).buildUpon();
@@ -160,22 +251,31 @@ public class GitHubOAuthService {
         });
     }
 
+    // --- Device Flow Methods ---
+
     public void requestDeviceCode(String clientId, DeviceCodeCallback callback) {
+        requestDeviceCode(clientId, null, callback);
+    }
+
+    public void requestDeviceCode(String clientId, String clientSecret, DeviceCodeCallback callback) {
         if (clientId == null || clientId.trim().isEmpty()) {
             callback.onError("GitHub Client ID is required for Device Flow.");
             return;
         }
 
-        FormBody formBody = new FormBody.Builder()
+        FormBody.Builder formBuilder = new FormBody.Builder()
                 .add("client_id", clientId.trim())
-                .add("scope", DEFAULT_SCOPES)
-                .build();
+                .add("scope", DEFAULT_SCOPES);
+
+        if (clientSecret != null && !clientSecret.trim().isEmpty()) {
+            formBuilder.add("client_secret", clientSecret.trim());
+        }
 
         Request request = new Request.Builder()
                 .url(DEVICE_CODE_URL)
                 .header("Accept", "application/json")
                 .header("User-Agent", "Vynara-3D-Studio-Android")
-                .post(formBody)
+                .post(formBuilder.build())
                 .build();
 
         VynaraLogger.system("GitHubOAuthService: Requesting Device Flow code...");
@@ -224,12 +324,20 @@ public class GitHubOAuthService {
                                        int intervalSeconds,
                                        int expiresInSeconds,
                                        DevicePollingCallback callback) {
+        startDeviceFlowPolling(clientId, null, deviceCode, intervalSeconds, expiresInSeconds, callback);
+    }
+
+    public void startDeviceFlowPolling(String clientId,
+                                       String clientSecret,
+                                       String deviceCode,
+                                       int intervalSeconds,
+                                       int expiresInSeconds,
+                                       DevicePollingCallback callback) {
         isPollingCancelled = false;
         final long startTime = System.currentTimeMillis();
         final long maxDurationMs = (expiresInSeconds > 0 ? expiresInSeconds : 900) * 1000L;
         final int intervalMs = Math.max(intervalSeconds, 5) * 1000;
 
-        // Use 1-element array to safely allow recursive reference inside anonymous inner class
         final Runnable[] pollRunnable = new Runnable[1];
 
         pollRunnable[0] = new Runnable() {
@@ -245,7 +353,7 @@ public class GitHubOAuthService {
                     return;
                 }
 
-                pollDeviceTokenOnce(clientId, deviceCode, new DevicePollingCallback() {
+                pollDeviceTokenOnce(clientId, clientSecret, deviceCode, new DevicePollingCallback() {
                     @Override
                     public void onTokenReceived(String accessToken) {
                         mainHandler.post(() -> callback.onTokenReceived(accessToken));
@@ -274,18 +382,21 @@ public class GitHubOAuthService {
         this.isPollingCancelled = true;
     }
 
-    private void pollDeviceTokenOnce(String clientId, String deviceCode, DevicePollingCallback callback) {
-        FormBody formBody = new FormBody.Builder()
+    private void pollDeviceTokenOnce(String clientId, String clientSecret, String deviceCode, DevicePollingCallback callback) {
+        FormBody.Builder formBuilder = new FormBody.Builder()
                 .add("client_id", clientId.trim())
                 .add("device_code", deviceCode.trim())
-                .add("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
-                .build();
+                .add("grant_type", "urn:ietf:params:oauth:grant-type:device_code");
+
+        if (clientSecret != null && !clientSecret.trim().isEmpty()) {
+            formBuilder.add("client_secret", clientSecret.trim());
+        }
 
         Request request = new Request.Builder()
                 .url(OAUTH_TOKEN_URL)
                 .header("Accept", "application/json")
                 .header("User-Agent", "Vynara-3D-Studio-Android")
-                .post(formBody)
+                .post(formBuilder.build())
                 .build();
 
         httpClient.newCall(request).enqueue(new Callback() {
@@ -330,6 +441,8 @@ public class GitHubOAuthService {
             }
         });
     }
+
+    // --- User Profile & Repository Operations ---
 
     public void fetchUserProfile(String accessToken, UserProfileCallback callback) {
         if (accessToken == null || accessToken.trim().isEmpty()) {
