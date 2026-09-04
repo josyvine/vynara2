@@ -28,7 +28,7 @@ public class ApiKeyManager {
     private static final String KEY_GITHUB_AVATAR_URL = "github_avatar_url";
 
     // Default Vynara GitHub OAuth App Client ID (Overrideable by user in Settings)
-    private static final String DEFAULT_GITHUB_CLIENT_ID = "Ov23liZ7jOsq55rJvx4Z";
+    private static final String DEFAULT_GITHUB_CLIENT_ID = "Ov23liSpdE2NbapBqoqu";
 
     private SharedPreferences prefs;
 
