@@ -54,7 +54,7 @@ public class DeviceFlowDialogFragment extends DialogFragment {
     @Override
     public void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setStyle(DialogFragment.STYLE_NO_TITLE, R.style.Theme_Vynara2_Dialog);
+        setStyle(DialogFragment.STYLE_NO_TITLE, 0);
         if (getArguments() != null) {
             clientId = getArguments().getString(ARG_CLIENT_ID, "");
             clientSecret = getArguments().getString(ARG_CLIENT_SECRET, "");
@@ -178,16 +178,45 @@ public class DeviceFlowDialogFragment extends DialogFragment {
                                 if (getContext() != null) {
                                     GitHubOAuthService.saveUserProfile(requireContext(), login, name, avatarUrl);
 
-                                    ApiKeyManager keyMgr = new ApiKeyManager(requireContext());
-                                    keyMgr.saveGitHubUser(login, avatarUrl);
-                                    keyMgr.saveGitHubConfig(keyMgr.getGitHubRepo(), accessToken, "vynara_generate");
-                                    keyMgr.saveComputeProvider(CloudProvider.GITHUB_ACTIONS);
+                                    if (tvStatusMessage != null) {
+                                        tvStatusMessage.setText("Setting up workspace repository...");
+                                    }
 
-                                    Toast.makeText(getContext(), "Signed in as @" + login + " successfully!", Toast.LENGTH_LONG).show();
+                                    // Method 2: Automatic Background Workspace & Workflow Provisioning
+                                    oAuthService.provisionUserWorkspace(requireContext(), accessToken, login, new GitHubOAuthService.ProvisionCallback() {
+                                        @Override
+                                        public void onSuccess(String repoFullName) {
+                                            if (getContext() != null) {
+                                                ApiKeyManager keyMgr = new ApiKeyManager(requireContext());
+                                                keyMgr.saveGitHubUser(login, avatarUrl);
+                                                keyMgr.saveGitHubConfig(repoFullName, accessToken, "vynara_generate");
+                                                keyMgr.saveComputeProvider(CloudProvider.GITHUB_ACTIONS);
 
-                                    notifySettingsFragmentToUpdate();
+                                                Toast.makeText(getContext(), "Signed in & Workspace Ready (@" + login + ")!", Toast.LENGTH_LONG).show();
+
+                                                notifySettingsFragmentToUpdate();
+                                            }
+                                            dismiss();
+                                        }
+
+                                        @Override
+                                        public void onError(String errorMessage) {
+                                            if (getContext() != null) {
+                                                ApiKeyManager keyMgr = new ApiKeyManager(requireContext());
+                                                keyMgr.saveGitHubUser(login, avatarUrl);
+                                                keyMgr.saveGitHubConfig(login + "/vynara2", accessToken, "vynara_generate");
+                                                keyMgr.saveComputeProvider(CloudProvider.GITHUB_ACTIONS);
+
+                                                Toast.makeText(getContext(), "Signed in as @" + login + "!", Toast.LENGTH_LONG).show();
+
+                                                notifySettingsFragmentToUpdate();
+                                            }
+                                            dismiss();
+                                        }
+                                    });
+                                } else {
+                                    dismiss();
                                 }
-                                dismiss();
                             }
 
                             @Override
