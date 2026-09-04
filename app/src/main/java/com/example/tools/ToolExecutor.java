@@ -307,9 +307,6 @@ public class ToolExecutor {
                                 }
                                 for (Character ch : result.getCharacters()) {
                                     characterManager.registerCharacter(ch);
-                                    if (ch.getRootObject() != null) {
-                                        engine.getSceneManager().getActiveScene().addObject(ch.getRootObject());
-                                    }
                                 }
                                 engine.getSceneManager().updateWorldTransforms();
                                 success.set(true);
@@ -388,16 +385,15 @@ public class ToolExecutor {
                         public void onSuccess(File downloadedGlbFile) {
                             try {
                                 GLTFImporter.ImportResult result = GLTFImporter.loadFromFile(downloadedGlbFile);
-                                if (!result.getCharacters().isEmpty()) {
-                                    Character riggedChar = result.getCharacters().get(0);
-                                    characterManager.registerCharacter(riggedChar);
-                                    engine.getSceneManager().getActiveScene().removeObject(target.getId());
-                                    if (riggedChar.getRootObject() != null) {
-                                        engine.getSceneManager().getActiveScene().addObject(riggedChar.getRootObject());
-                                    }
-                                    engine.getSceneManager().updateWorldTransforms();
-                                    success.set(true);
+                                engine.getSceneManager().getActiveScene().removeObject(target.getId());
+                                for (SceneObject obj : result.getSceneObjects()) {
+                                    engine.getSceneManager().getActiveScene().addObject(obj);
                                 }
+                                for (Character riggedChar : result.getCharacters()) {
+                                    characterManager.registerCharacter(riggedChar);
+                                }
+                                engine.getSceneManager().updateWorldTransforms();
+                                success.set(true);
                             } catch (Exception ex) {
                                 VynaraLogger.e("Failed to parse auto-rigged GLB", ex);
                             } finally {
@@ -447,10 +443,6 @@ public class ToolExecutor {
                             }
                             for (Character ch : result.getCharacters()) {
                                 characterManager.registerCharacter(ch);
-                                if (ch.getRootObject() != null) {
-                                    ch.getRootObject().getTransform().setPosition(px, py, pz);
-                                    engine.getSceneManager().getActiveScene().addObject(ch.getRootObject());
-                                }
                             }
                             engine.getSceneManager().updateWorldTransforms();
                             success.set(true);
