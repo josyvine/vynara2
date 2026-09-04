@@ -4,6 +4,7 @@ import android.opengl.GLSurfaceView;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
+import android.view.ScaleGestureDetector;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageButton;
@@ -18,6 +19,7 @@ import androidx.fragment.app.Fragment;
 import com.example.MainActivity;
 import com.example.R;
 import com.example.character.Character;
+import com.example.engine.Camera;
 import com.example.engine.GLTFImporter;
 import com.example.engine.Scene;
 import com.example.engine.SceneObject;
@@ -46,6 +48,7 @@ public class StudioFragment extends Fragment {
     private boolean isPlaying = false;
     private android.os.Handler animHandler;
     private Runnable animRunnable;
+    private ScaleGestureDetector scaleGestureDetector;
 
     @Nullable
     @Override
@@ -80,7 +83,7 @@ public class StudioFragment extends Fragment {
         glSurfaceView.setRenderer(renderer);
         glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
 
-        // Enable 360-degree Touch Viewport Camera Orbit Navigation
+        // Enable 360-degree Touch Viewport Camera Orbit Navigation with Pinch-to-Zoom
         setupViewportTouchOrbitGesture();
 
         updateStudioStatsUI();
@@ -270,68 +273,151 @@ public class StudioFragment extends Fragment {
 
     /**
      * Touch Event Handler: Translates touch drag physics on the 3D surface view directly into spherical camera orbit rotation.
+     * Incorporates ScaleGestureDetector for pinch-to-zoom and multi-touch pointer stability.
      */
     private void setupViewportTouchOrbitGesture() {
         if (glSurfaceView == null) return;
 
+        // Initialize Scale Gesture Detector for Pinch-to-Zoom
+        scaleGestureDetector = new ScaleGestureDetector(requireContext(), new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            @Override
+            public boolean onScale(ScaleGestureDetector detector) {
+                float scaleFactor = detector.getScaleFactor();
+                if (engine != null && engine.getCameraManager() != null) {
+                    Camera camera = engine.getCameraManager().getActiveCamera();
+                    if (camera != null) {
+                        float[] eye = camera.getEye();
+                        float[] target = camera.getTarget();
+                        if (eye != null && target != null && eye.length >= 3 && target.length >= 3) {
+                            float relX = eye[0] - target[0];
+                            float relY = eye[1] - target[1];
+                            float relZ = eye[2] - target[2];
+                            float radius = (float) Math.sqrt(relX * relX + relY * relY + relZ * relZ);
+
+                            // Zoom by modulating radius: factor > 1 zooms in, factor < 1 zooms out
+                            float newRadius = radius / scaleFactor;
+                            if (newRadius < 1.0f) newRadius = 1.0f;     // Minimum close-up limit
+                            if (newRadius > 100.0f) newRadius = 100.0f; // Maximum distance limit
+
+                            float ratio = newRadius / (radius > 0.001f ? radius : 1.0f);
+                            camera.setEye(target[0] + relX * ratio, target[1] + relY * ratio, target[2] + relZ * ratio);
+                        }
+                    }
+                }
+                return true;
+            }
+        });
+
         glSurfaceView.setOnTouchListener(new View.OnTouchListener() {
             private float previousTouchX;
             private float previousTouchY;
+            private int activePointerId = MotionEvent.INVALID_POINTER_ID;
 
             @Override
             public boolean onTouch(View v, MotionEvent event) {
                 if (event == null) return false;
 
-                float x = event.getX();
-                float y = event.getY();
+                // Let the scale gesture detector process pinch events
+                scaleGestureDetector.onTouchEvent(event);
 
-                switch (event.getAction()) {
-                    case MotionEvent.ACTION_DOWN:
-                        previousTouchX = x;
-                        previousTouchY = y;
+                int action = event.getActionMasked();
+
+                switch (action) {
+                    case MotionEvent.ACTION_DOWN: {
+                        int pointerIndex = event.getActionIndex();
+                        activePointerId = event.getPointerId(pointerIndex);
+                        previousTouchX = event.getX(pointerIndex);
+                        previousTouchY = event.getY(pointerIndex);
                         v.performClick();
                         return true;
+                    }
 
-                    case MotionEvent.ACTION_MOVE:
-                        float deltaX = x - previousTouchX;
-                        float deltaY = y - previousTouchY;
+                    case MotionEvent.ACTION_POINTER_DOWN: {
+                        // When a second finger touches, re-anchor coordinates to prevent coordinate spike
+                        int pointerIndex = event.getActionIndex();
+                        activePointerId = event.getPointerId(pointerIndex);
+                        previousTouchX = event.getX(pointerIndex);
+                        previousTouchY = event.getY(pointerIndex);
+                        return true;
+                    }
 
-                        if (engine != null && engine.getCameraManager() != null) {
-                            com.example.engine.Camera camera = engine.getCameraManager().getActiveCamera();
-                            if (camera != null) {
-                                float[] eye = camera.getEye();
-                                float[] target = camera.getTarget();
+                    case MotionEvent.ACTION_MOVE: {
+                        // Only perform 1-finger orbit if we are not pinching
+                        if (event.getPointerCount() == 1 && !scaleGestureDetector.isInProgress()) {
+                            int pointerIndex = event.findPointerIndex(activePointerId);
+                            if (pointerIndex == -1) {
+                                pointerIndex = 0;
+                                activePointerId = event.getPointerId(pointerIndex);
+                            }
 
-                                if (eye != null && target != null && eye.length >= 3 && target.length >= 3) {
-                                    float relX = eye[0] - target[0];
-                                    float relY = eye[1] - target[1];
-                                    float relZ = eye[2] - target[2];
+                            float x = event.getX(pointerIndex);
+                            float y = event.getY(pointerIndex);
 
-                                    float radius = (float) Math.sqrt(relX * relX + relY * relY + relZ * relZ);
-                                    if (radius < 0.001f) radius = 5.0f;
+                            float deltaX = x - previousTouchX;
+                            float deltaY = y - previousTouchY;
 
-                                    float yaw = (float) Math.atan2(relZ, relX);
-                                    float pitch = (float) Math.asin(Math.max(-0.99f, Math.min(0.99f, relY / radius)));
+                            // Clamp max single-frame delta to eliminate camera jumps/fluctuations
+                            if (Math.abs(deltaX) < 100f && Math.abs(deltaY) < 100f) {
+                                if (engine != null && engine.getCameraManager() != null) {
+                                    Camera camera = engine.getCameraManager().getActiveCamera();
+                                    if (camera != null) {
+                                        float[] eye = camera.getEye();
+                                        float[] target = camera.getTarget();
 
-                                    yaw += deltaX * 0.008f;
-                                    pitch += deltaY * 0.008f;
+                                        if (eye != null && target != null && eye.length >= 3 && target.length >= 3) {
+                                            float relX = eye[0] - target[0];
+                                            float relY = eye[1] - target[1];
+                                            float relZ = eye[2] - target[2];
 
-                                    float maxPitch = 1.52f; // ~87 degrees limit
-                                    if (pitch > maxPitch) pitch = maxPitch;
-                                    if (pitch < -maxPitch) pitch = -maxPitch;
+                                            float radius = (float) Math.sqrt(relX * relX + relY * relY + relZ * relZ);
+                                            if (radius < 0.001f) radius = 5.0f;
 
-                                    float newX = target[0] + radius * (float) (Math.cos(pitch) * Math.cos(yaw));
-                                    float newY = target[1] + radius * (float) Math.sin(pitch);
-                                    float newZ = target[2] + radius * (float) (Math.cos(pitch) * Math.sin(yaw));
+                                            float yaw = (float) Math.atan2(relZ, relX);
+                                            float pitch = (float) Math.asin(Math.max(-0.99f, Math.min(0.99f, relY / radius)));
 
-                                    camera.setEye(newX, newY, newZ);
+                                            yaw += deltaX * 0.006f;
+                                            pitch += deltaY * 0.006f;
+
+                                            float maxPitch = 1.52f; // ~87 degrees vertical limit
+                                            if (pitch > maxPitch) pitch = maxPitch;
+                                            if (pitch < -maxPitch) pitch = -maxPitch;
+
+                                            float newX = target[0] + radius * (float) (Math.cos(pitch) * Math.cos(yaw));
+                                            float newY = target[1] + radius * (float) Math.sin(pitch);
+                                            float newZ = target[2] + radius * (float) (Math.cos(pitch) * Math.sin(yaw));
+
+                                            camera.setEye(newX, newY, newZ);
+                                        }
+                                    }
                                 }
                             }
-                        }
 
-                        previousTouchX = x;
-                        previousTouchY = y;
+                            previousTouchX = x;
+                            previousTouchY = y;
+                        }
                         return true;
+                    }
+
+                    case MotionEvent.ACTION_POINTER_UP: {
+                        int pointerIndex = event.getActionIndex();
+                        int pointerId = event.getPointerId(pointerIndex);
+                        if (pointerId == activePointerId) {
+                            // Active pointer left; choose a different pointer and re-anchor coordinates
+                            int newPointerIndex = (pointerIndex == 0) ? 1 : 0;
+                            if (newPointerIndex < event.getPointerCount()) {
+                                activePointerId = event.getPointerId(newPointerIndex);
+                                previousTouchX = event.getX(newPointerIndex);
+                                previousTouchY = event.getY(newPointerIndex);
+                            }
+                        }
+                        return true;
+                    }
+
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL: {
+                        activePointerId = MotionEvent.INVALID_POINTER_ID;
+                        return true;
+                    }
                 }
                 return false;
             }
