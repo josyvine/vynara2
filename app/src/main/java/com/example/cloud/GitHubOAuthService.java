@@ -229,7 +229,10 @@ public class GitHubOAuthService {
         final long maxDurationMs = (expiresInSeconds > 0 ? expiresInSeconds : 900) * 1000L;
         final int intervalMs = Math.max(intervalSeconds, 5) * 1000;
 
-        Runnable pollRunnable = new Runnable() {
+        // Use 1-element array to safely allow recursive reference inside anonymous inner class
+        final Runnable[] pollRunnable = new Runnable[1];
+
+        pollRunnable[0] = new Runnable() {
             @Override
             public void run() {
                 if (isPollingCancelled) {
@@ -251,8 +254,8 @@ public class GitHubOAuthService {
                     @Override
                     public void onPending(String status) {
                         mainHandler.post(() -> callback.onPending(status));
-                        if (!isPollingCancelled) {
-                            mainHandler.postDelayed(pollRunnable, intervalMs);
+                        if (!isPollingCancelled && pollRunnable[0] != null) {
+                            mainHandler.postDelayed(pollRunnable[0], intervalMs);
                         }
                     }
 
@@ -264,7 +267,7 @@ public class GitHubOAuthService {
             }
         };
 
-        mainHandler.postDelayed(pollRunnable, intervalMs);
+        mainHandler.postDelayed(pollRunnable[0], intervalMs);
     }
 
     public void cancelDeviceFlowPolling() {
