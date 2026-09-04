@@ -94,7 +94,8 @@ public class AIOrchestrator {
                 "- Knowledge describes construction rules and facts. Capabilities describe what the system knows how to do.\n" +
                 "- Tools are the ONLY executable operations. Tasks are concrete operations in the production plan.\n" +
                 "- You may reason using knowledge and capabilities, but you may execute ONLY registered tools.\n" +
-                "- When Cloud Workers (GitHub Actions / Hugging Face) are enabled, prefer remote high-fidelity tools like `blender.cloud_generate` or `rig.auto_rig_cloud` for complex geometries and character rigging.\n" +
+                "- When Cloud Workers (GitHub Actions / Hugging Face) are enabled or Target Engine is BLENDER_NATIVE, select `blender.cloud_generate` or `rig.auto_rig_cloud` as the primary geometry tool.\n" +
+                "- CRITICAL FOR BLENDER CLOUD GENERATION: In any `bpyScript` parameter provided for `blender.cloud_generate`, you MUST ensure the script imports `os`, creates the output directory `import os; os.makedirs('output', exist_ok=True)`, constructs the 3D mesh, and ends with `bpy.ops.export_scene.gltf(filepath='output/model.glb', export_format='GLB')`.\n" +
                 "- Choose your commands strictly from the provided Authoritative Registered Commands manifest. Never invent Tool IDs.\n\n" +
                 providerContext + "\n" +
                 toolManifestBuilder.toString() + "\n\n" +
@@ -156,8 +157,16 @@ public class AIOrchestrator {
             return;
         }
 
+        String blenderSystemInstruction = "You are Vynara Blender Script Generator. Generate standalone executable Python code for Blender 4.x (`bpy`).\n" +
+                "REQUIREMENTS:\n" +
+                "1. Clean default scene (delete default cube/light/camera if required).\n" +
+                "2. Create realistic 3D mesh geometry, materials, and lighting matching the user prompt.\n" +
+                "3. CRITICAL MANDATORY STEP: Import `os`, create output directory `import os; os.makedirs('output', exist_ok=True)`, and export the final 3D scene directly to GLB format using:\n" +
+                "   `bpy.ops.export_scene.gltf(filepath='output/model.glb', export_format='GLB')`\n" +
+                "4. Return ONLY valid Python code without Markdown formatting backticks.";
+
         VynaraLogger.system("Generating Blender Python execution script via Gemini...");
-        apiClient.generateBlenderScript(apiKeyManager.getApiKey(), apiKeyManager.getSelectedModel(), prompt, new GeminiApiClient.ApiCallback<String>() {
+        apiClient.generateBlenderScript(apiKeyManager.getApiKey(), apiKeyManager.getSelectedModel(), prompt + "\n" + blenderSystemInstruction, new GeminiApiClient.ApiCallback<String>() {
             @Override
             public void onSuccess(String bpyScript) {
                 VynaraLogger.gemini("Blender script generated successfully (" + bpyScript.length() + " chars)");
