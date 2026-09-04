@@ -2,11 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Network permissions for Gemini API connectivity -->
+    <!-- Network permissions for Gemini API and GitHub/HuggingFace Cloud Worker connectivity -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Storage and Media Permissions for Reference Image Access -->
+    <!-- Storage and Media Permissions for Reference Image and GLB 3D Asset Access -->
     <!-- For Android 12 (API level 32) and lower -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
@@ -36,14 +36,27 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:label="@string/app_name"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:windowSoftInputMode="adjustResize"
             android:hardwareAccelerated="true"
             android:theme="@style/Theme.Vynara">
+            
+            <!-- Standard App Launcher Intent -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- GitHub OAuth2 Deep Link Interceptor (vynara://oauth-callback) -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="vynara"
+                    android:host="oauth-callback" />
             </intent-filter>
         </activity>
     </application>
