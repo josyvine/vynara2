@@ -10,18 +10,8 @@ import com.example.asset.AssetManager;
 import com.example.character.Character;
 import com.example.character.CharacterManager;
 import com.example.character.CharacterSpecification;
-import com.example.engine.MaterialManager;
-import com.example.engine.Scene;
-import com.example.engine.SceneManager;
 import com.example.engine.SceneObject;
 import com.example.engine.ThreeDEngine;
-import com.example.engine.generators.ChairGenerator;
-import com.example.engine.generators.HouseGenerator;
-import com.example.engine.generators.PoolGenerator;
-import com.example.engine.generators.SofaGenerator;
-import com.example.engine.generators.TableGenerator;
-import com.example.engine.generators.TreeGenerator;
-import com.example.engine.generators.VillaGenerator;
 import com.example.knowledge.KnowledgeManager;
 import com.example.project.ProjectManager;
 import com.example.tasks.ExecutionEngine;
@@ -74,9 +64,13 @@ public class ProjectRuntime {
     }
 
     public static synchronized ProjectRuntime getInstance(Context context) {
-        if (instance == null) {
+        if (instance == null && context != null) {
             instance = new ProjectRuntime(context);
         }
+        return instance;
+    }
+
+    public static synchronized ProjectRuntime getInstance() {
         return instance;
     }
 
@@ -108,7 +102,6 @@ public class ProjectRuntime {
         
         String category = asset.getCategory() != null ? asset.getCategory().toUpperCase().trim() : "";
         String name = asset.getName() != null ? asset.getName().toLowerCase().trim() : "";
-        String id = "asset_inj_" + System.currentTimeMillis();
 
         boolean success = false;
 
@@ -117,32 +110,9 @@ public class ProjectRuntime {
             success = obj != null;
         } else if ("MATERIAL".equals(category)) {
             success = engine.getMaterialManager().createCustomPBRMaterial(asset.getName(), "#A0A5BD", 0.1f, 0.5f) != null;
-        } else if ("FURNITURE".equals(category)) {
-            SceneObject furnitureObj;
-            if (name.contains("table") || name.contains("desk")) {
-                furnitureObj = TableGenerator.generateTable(id, asset.getName(), engine.getMaterialManager());
-            } else if (name.contains("chair")) {
-                furnitureObj = ChairGenerator.generateChair(id, asset.getName(), engine.getMaterialManager());
-            } else {
-                furnitureObj = SofaGenerator.generateSofa(id, asset.getName(), engine.getMaterialManager());
-            }
-            if (furnitureObj != null) {
-                engine.getSceneManager().getActiveScene().addObject(furnitureObj);
-                success = true;
-            }
-        } else if ("ARCHITECTURE".equals(category)) {
-            SceneObject archObj;
-            if (name.contains("villa")) {
-                archObj = VillaGenerator.generateVilla(id, asset.getName(), engine.getMaterialManager());
-            } else if (name.contains("pool")) {
-                archObj = PoolGenerator.generatePool(id, asset.getName(), engine.getMaterialManager());
-            } else {
-                archObj = HouseGenerator.generateHouse(id, asset.getName(), engine.getMaterialManager());
-            }
-            if (archObj != null) {
-                engine.getSceneManager().getActiveScene().addObject(archObj);
-                success = true;
-            }
+        } else if ("FURNITURE".equals(category) || "ARCHITECTURE".equals(category) || "VEGETATION".equals(category) || "ENVIRONMENT".equals(category)) {
+            SceneObject structureObj = engine.createProceduralStructure(name, asset.getName());
+            success = structureObj != null;
         } else if ("CHARACTER".equals(category)) {
             CharacterSpecification spec = new CharacterSpecification("HUMANOID", asset.getName());
             Character c = characterManager.createHumanoid(spec);
@@ -151,12 +121,6 @@ public class ProjectRuntime {
             CharacterSpecification spec = new CharacterSpecification("DOG", asset.getName());
             Character c = characterManager.createCreature(spec);
             success = c != null;
-        } else if ("VEGETATION".equals(category) || "ENVIRONMENT".equals(category)) {
-            SceneObject vegObj = TreeGenerator.generateTree(id, asset.getName(), engine.getMaterialManager());
-            if (vegObj != null) {
-                engine.getSceneManager().getActiveScene().addObject(vegObj);
-                success = true;
-            }
         }
 
         if (success) {
