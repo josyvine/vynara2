@@ -22,7 +22,6 @@ import okhttp3.Response;
 import okhttp3.ResponseBody;
 
 public class AssetManager {
-    private static final String TAG = "AssetManager";
     private static final String CACHE_SUBDIR = "models_cache";
 
     private final List<Asset> assets = new ArrayList<>();
@@ -138,7 +137,7 @@ public class AssetManager {
 
         // Fast Path: Check if model is already stored locally on disk
         if (localFile.exists() && localFile.length() > 0) {
-            VynaraLogger.i(TAG, "Cache hit for asset: " + assetId + " (" + localFile.length() + " bytes)");
+            VynaraLogger.system("AssetManager: Cache hit for asset: " + assetId + " (" + localFile.length() + " bytes)");
             if (listener != null) {
                 listener.onProgress(100);
                 listener.onSuccess(localFile);
@@ -153,7 +152,7 @@ public class AssetManager {
             return;
         }
 
-        VynaraLogger.i(TAG, "Streaming asset on-demand from: " + downloadUrl);
+        VynaraLogger.system("AssetManager: Streaming asset on-demand from: " + downloadUrl);
 
         Request request = new Request.Builder()
                 .url(downloadUrl.trim())
@@ -164,7 +163,7 @@ public class AssetManager {
         httpClient.newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
-                VynaraLogger.e(TAG, "Asset stream connection error: " + e.getMessage(), e);
+                VynaraLogger.e("Asset stream connection error: " + e.getMessage(), e);
                 if (listener != null) {
                     mainHandler.post(() -> listener.onError("Network stream failed: " + e.getMessage()));
                 }
@@ -202,7 +201,7 @@ public class AssetManager {
                     fos.flush();
 
                     if (localFile.exists() && localFile.length() > 0) {
-                        Asset downloadedAsset = new Asset(assetId, assetId, "STREAMED", localFile.getAbsolutePath());
+                        Asset downloadedAsset = new Asset(assetId, assetId, "STREAMED", "GLB", localFile.getAbsolutePath());
                         addAsset(downloadedAsset);
 
                         if (listener != null) {
@@ -218,7 +217,7 @@ public class AssetManager {
                     if (localFile.exists()) {
                         localFile.delete();
                     }
-                    VynaraLogger.e(TAG, "Failed writing streamed asset to storage", ex);
+                    VynaraLogger.e("Failed writing streamed asset to storage", ex);
                     if (listener != null) {
                         mainHandler.post(() -> listener.onError("File storage error: " + ex.getMessage()));
                     }
