@@ -21,6 +21,15 @@ public class ApiKeyManager {
     private static final String KEY_HF_SPACE_URL = "hf_space_url";
     private static final String KEY_HF_TOKEN = "hf_token";
 
+    // GitHub OAuth2 Session Keys
+    private static final String KEY_GITHUB_CLIENT_ID = "github_client_id";
+    private static final String KEY_GITHUB_CLIENT_SECRET = "github_client_secret";
+    private static final String KEY_GITHUB_USERNAME = "github_username";
+    private static final String KEY_GITHUB_AVATAR_URL = "github_avatar_url";
+
+    // Default Vynara GitHub OAuth App Client ID (Overrideable by user in Settings)
+    private static final String DEFAULT_GITHUB_CLIENT_ID = "Ov23liZ7jOsq55rJvx4Z";
+
     private SharedPreferences prefs;
 
     public ApiKeyManager(Context context) {
@@ -125,7 +134,7 @@ public class ApiKeyManager {
     public boolean hasGitHubConfig() {
         String repo = getGitHubRepo();
         String pat = getGitHubPat();
-        return repo != null && !repo.trim().isEmpty() && pat != null && !pat.trim().isEmpty();
+        return pat != null && !pat.trim().isEmpty();
     }
 
     public String getMaskedGitHubPat() {
@@ -134,6 +143,56 @@ public class ApiKeyManager {
             return "••••••••••••••••";
         }
         return token.substring(0, 4) + "••••••••••••" + token.substring(token.length() - 3);
+    }
+
+    public void saveGitHubOAuthApp(String clientId, String clientSecret) {
+        SharedPreferences.Editor editor = prefs.edit();
+        if (clientId != null && !clientId.trim().isEmpty()) {
+            editor.putString(KEY_GITHUB_CLIENT_ID, clientId.trim());
+        }
+        if (clientSecret != null) {
+            editor.putString(KEY_GITHUB_CLIENT_SECRET, clientSecret.trim());
+        }
+        editor.apply();
+    }
+
+    public String getGitHubClientId() {
+        return prefs.getString(KEY_GITHUB_CLIENT_ID, DEFAULT_GITHUB_CLIENT_ID);
+    }
+
+    public String getGitHubClientSecret() {
+        return prefs.getString(KEY_GITHUB_CLIENT_SECRET, "");
+    }
+
+    public void saveGitHubUser(String username, String avatarUrl) {
+        SharedPreferences.Editor editor = prefs.edit();
+        if (username != null) {
+            editor.putString(KEY_GITHUB_USERNAME, username.trim());
+        }
+        if (avatarUrl != null) {
+            editor.putString(KEY_GITHUB_AVATAR_URL, avatarUrl.trim());
+        }
+        editor.apply();
+    }
+
+    public String getGitHubUsername() {
+        return prefs.getString(KEY_GITHUB_USERNAME, "");
+    }
+
+    public String getGitHubAvatarUrl() {
+        return prefs.getString(KEY_GITHUB_AVATAR_URL, "");
+    }
+
+    public boolean isGitHubLoggedIn() {
+        return hasGitHubConfig() && !getGitHubUsername().isEmpty();
+    }
+
+    public void logoutGitHub() {
+        prefs.edit()
+                .remove(KEY_GITHUB_PAT)
+                .remove(KEY_GITHUB_USERNAME)
+                .remove(KEY_GITHUB_AVATAR_URL)
+                .apply();
     }
 
     public void saveHuggingFaceConfig(String spaceUrl, String token) {
@@ -174,6 +233,8 @@ public class ApiKeyManager {
                 .remove(KEY_GITHUB_REPO)
                 .remove(KEY_GITHUB_PAT)
                 .remove(KEY_GITHUB_EVENT)
+                .remove(KEY_GITHUB_USERNAME)
+                .remove(KEY_GITHUB_AVATAR_URL)
                 .remove(KEY_HF_SPACE_URL)
                 .remove(KEY_HF_TOKEN)
                 .apply();
