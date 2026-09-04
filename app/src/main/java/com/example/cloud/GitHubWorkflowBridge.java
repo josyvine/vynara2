@@ -32,6 +32,8 @@ public class GitHubWorkflowBridge {
     private static final int DEFAULT_TIMEOUT_SECONDS = 60;
     private static final long POLLING_INTERVAL_MS = 5000; // 5 seconds interval
     private static final long MAX_POLLING_DURATION_MS = 300000; // 5 minutes timeout
+    private static final int MAX_ARTIFACT_RETRY_ATTEMPTS = 12; // 12 retries (36s total window for GitHub indexing)
+    private static final long ARTIFACT_RETRY_DELAY_MS = 3000; // 3 seconds between artifact retries
 
     private final OkHttpClient httpClient;
     private final Handler mainHandler;
@@ -342,27 +344,11 @@ public class GitHubWorkflowBridge {
 
                                 if ("completed".equalsIgnoreCase(status)) {
                                     if ("success".equalsIgnoreCase(conclusion)) {
-                                        VynaraLogger.system("GitHubWorkflowBridge: Workflow run #" + runId + " succeeded! Downloading artifact...");
+                                        VynaraLogger.system("GitHubWorkflowBridge: Workflow run #" + runId + " succeeded! Waiting for artifact indexing...");
                                         mainHandler.post(() -> callback.onStatusUpdate("downloading", "Downloading GLB artifact..."));
 
-                                        downloadWorkflowArtifact(repository, personalAccessToken, assetId, destinationFile, new ArtifactDownloadCallback() {
-                                            @Override
-                                            public void onProgress(int percentage, long bytesRead, long totalBytes) {
-                                                callback.onProgress(percentage, bytesRead, totalBytes);
-                                            }
-
-                                            @Override
-                                            public void onSuccess(File downloadedFile) {
-                                                VynaraLogger.system("GitHubWorkflowBridge: GLB downloaded and extracted successfully: " + downloadedFile.getAbsolutePath());
-                                                callback.onSuccess(downloadedFile);
-                                            }
-
-                                            @Override
-                                            public void onError(String errorMessage) {
-                                                VynaraLogger.e("GitHubWorkflowBridge: Artifact download failed: " + errorMessage);
-                                                callback.onError(errorMessage);
-                                            }
-                                        });
+                                        // Start retry polling loop to allow GitHub API artifact indexing to complete
+                                        pollAndDownloadArtifact(repository, personalAccessToken, assetId, destinationFile, callback, 1, MAX_ARTIFACT_RETRY_ATTEMPTS);
                                         return;
                                     } else {
                                         String failureMsg = "GitHub Workflow Run #" + runId + " failed with conclusion: " + conclusion;
@@ -386,6 +372,39 @@ public class GitHubWorkflowBridge {
         };
 
         mainHandler.post(pollRunnable[0]);
+    }
+
+    private void pollAndDownloadArtifact(String repository,
+                                         String personalAccessToken,
+                                         String assetId,
+                                         File destinationFile,
+                                         WorkflowPollingCallback callback,
+                                         int attempt,
+                                         int maxAttempts) {
+        downloadWorkflowArtifact(repository, personalAccessToken, assetId, destinationFile, new ArtifactDownloadCallback() {
+            @Override
+            public void onProgress(int percentage, long bytesRead, long totalBytes) {
+                callback.onProgress(percentage, bytesRead, totalBytes);
+            }
+
+            @Override
+            public void onSuccess(File downloadedFile) {
+                VynaraLogger.system("GitHubWorkflowBridge: GLB downloaded and extracted successfully: " + downloadedFile.getAbsolutePath());
+                callback.onSuccess(downloadedFile);
+            }
+
+            @Override
+            public void onError(String errorMessage) {
+                if (attempt < maxAttempts && (errorMessage.contains("not ready yet") || errorMessage.contains("No build artifacts found"))) {
+                    VynaraLogger.system("GitHubWorkflowBridge: Waiting for GitHub artifact indexing (attempt " + attempt + "/" + maxAttempts + ")...");
+                    mainHandler.post(() -> callback.onStatusUpdate("indexing", "Waiting for artifact indexing (" + attempt + "/" + maxAttempts + ")..."));
+                    mainHandler.postDelayed(() -> pollAndDownloadArtifact(repository, personalAccessToken, assetId, destinationFile, callback, attempt + 1, maxAttempts), ARTIFACT_RETRY_DELAY_MS);
+                } else {
+                    VynaraLogger.e("GitHubWorkflowBridge: Artifact download failed: " + errorMessage);
+                    callback.onError(errorMessage);
+                }
+            }
+        });
     }
 
     private void executeBinaryDownload(String downloadUrl,
