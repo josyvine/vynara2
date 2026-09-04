@@ -1,5 +1,10 @@
 package com.example.ui;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -9,12 +14,14 @@ import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageButton;
+import android.widget.LinearLayout;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
 import androidx.fragment.app.Fragment;
 
 import com.example.R;
@@ -22,8 +29,10 @@ import com.example.ai.AIModel;
 import com.example.ai.ApiKeyManager;
 import com.example.ai.GeminiApiClient;
 import com.example.cloud.CloudProvider;
+import com.example.cloud.GitHubOAuthService;
 import com.example.cloud.GitHubWorkflowBridge;
 import com.example.cloud.HuggingFaceBridge;
+import com.example.cloud.models.DeviceCodeResponse;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -42,6 +51,17 @@ public class SettingsFragment extends Fragment {
     private EditText etHfSpaceUrl;
     private EditText etHfToken;
 
+    // GitHub OAuth Views
+    private LinearLayout layoutGithubLoggedOut;
+    private LinearLayout layoutGithubLoggedIn;
+    private TextView tvGithubUser;
+    private Button btnGithubLogin;
+    private Button btnGithubDeviceLogin;
+    private Button btnGithubLogout;
+
+    private GitHubOAuthService oAuthService;
+    private AlertDialog deviceCodeDialog;
+
     // CRITICAL FIX: Initialize flag as true to block all accidental, system-triggered 
     // selection events during the initial layout startup passes before live models load.
     private boolean isUpdatingModels = true;
@@ -56,6 +76,8 @@ public class SettingsFragment extends Fragment {
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
 
+        oAuthService = new GitHubOAuthService();
+
         etApiKey = view.findViewById(R.id.et_api_key);
         tvStatus = view.findViewById(R.id.tv_connection_status);
         spinnerModel = view.findViewById(R.id.spinner_gemini_model);
@@ -66,6 +88,13 @@ public class SettingsFragment extends Fragment {
         etGithubPat = view.findViewById(R.id.et_github_pat);
         etHfSpaceUrl = view.findViewById(R.id.et_hf_space_url);
         etHfToken = view.findViewById(R.id.et_hf_token);
+
+        layoutGithubLoggedOut = view.findViewById(R.id.layout_github_logged_out);
+        layoutGithubLoggedIn = view.findViewById(R.id.layout_github_logged_in);
+        tvGithubUser = view.findViewById(R.id.tv_github_user);
+        btnGithubLogin = view.findViewById(R.id.btn_github_login);
+        btnGithubDeviceLogin = view.findViewById(R.id.btn_github_device_login);
+        btnGithubLogout = view.findViewById(R.id.btn_github_logout);
 
         final List<String> modelList = new ArrayList<>();
         modelList.add("gemini-3.5-flash");
@@ -81,22 +110,20 @@ public class SettingsFragment extends Fragment {
         if (getContext() != null) {
             ApiKeyManager keyMgr = new ApiKeyManager(getContext());
             
-            // Phase 26 Alignment: Display securely masked API key to avoid plain-text screen exposure
+            // Display securely masked Gemini API key
             if (keyMgr.hasApiKey()) {
                 if (etApiKey != null) etApiKey.setText(keyMgr.getMaskedApiKey());
                 if (tvStatus != null) {
                     tvStatus.setText("● Connected (Secure)");
                     tvStatus.setTextColor(0xFF00E676);
                 }
-
-                // Fetch live models from Google API automatically on start
                 fetchLiveModels(keyMgr.getApiKey(), modelList, modelAdapter, keyMgr, false);
             } else {
                 if (tvStatus != null) {
                     tvStatus.setText("● Disconnected");
                     tvStatus.setTextColor(0xFFFF5252);
                 }
-                isUpdatingModels = false; // Allow manual selection if disconnected
+                isUpdatingModels = false;
             }
 
             String currentSelectedModel = keyMgr.getSelectedModel();
@@ -109,9 +136,7 @@ public class SettingsFragment extends Fragment {
                 spinnerModel.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
                     @Override
                     public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                        if (isUpdatingModels) {
-                            return; // Discard auto-selection events during async list reload
-                        }
+                        if (isUpdatingModels) return;
                         if (position >= 0 && position < modelList.size()) {
                             String selected = modelList.get(position);
                             keyMgr.saveSelectedModel(selected);
@@ -156,6 +181,9 @@ public class SettingsFragment extends Fragment {
                 });
             }
 
+            // Setup GitHub OAuth State & UI
+            updateGitHubAuthUI(keyMgr);
+
             // Restore GitHub fields
             if (etGithubRepo != null && !keyMgr.getGitHubRepo().isEmpty()) {
                 etGithubRepo.setText(keyMgr.getGitHubRepo());
@@ -170,6 +198,30 @@ public class SettingsFragment extends Fragment {
             }
             if (etHfToken != null && !keyMgr.getHuggingFaceToken().isEmpty()) {
                 etHfToken.setText(keyMgr.getMaskedHuggingFaceToken());
+            }
+
+            // GitHub OAuth Web Login Trigger
+            if (btnGithubLogin != null) {
+                btnGithubLogin.setOnClickListener(v -> {
+                    String authUrl = GitHubOAuthService.buildWebAuthorizeUrl(keyMgr.getGitHubClientId(), GitHubOAuthService.DEFAULT_REDIRECT_URI, "vynara_auth");
+                    Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(authUrl));
+                    startActivity(browserIntent);
+                });
+            }
+
+            // GitHub Device Code Flow Trigger
+            if (btnGithubDeviceLogin != null) {
+                btnGithubDeviceLogin.setOnClickListener(v -> startGitHubDeviceFlow(keyMgr));
+            }
+
+            // GitHub Logout Trigger
+            if (btnGithubLogout != null) {
+                btnGithubLogout.setOnClickListener(v -> {
+                    keyMgr.logoutGitHub();
+                    if (etGithubPat != null) etGithubPat.setText("");
+                    updateGitHubAuthUI(keyMgr);
+                    Toast.makeText(getContext(), "Logged out of GitHub", Toast.LENGTH_SHORT).show();
+                });
             }
 
             // Save & Test buttons for GitHub
@@ -345,13 +397,116 @@ public class SettingsFragment extends Fragment {
         }
     }
 
+    private void updateGitHubAuthUI(ApiKeyManager keyMgr) {
+        if (keyMgr == null) return;
+        boolean loggedIn = keyMgr.isGitHubLoggedIn();
+
+        if (layoutGithubLoggedIn != null) {
+            layoutGithubLoggedIn.setVisibility(loggedIn ? View.VISIBLE : View.GONE);
+        }
+        if (layoutGithubLoggedOut != null) {
+            layoutGithubLoggedOut.setVisibility(loggedIn ? View.GONE : View.VISIBLE);
+        }
+        if (loggedIn && tvGithubUser != null) {
+            tvGithubUser.setText("Signed in as @" + keyMgr.getGitHubUsername());
+        }
+    }
+
+    private void startGitHubDeviceFlow(ApiKeyManager keyMgr) {
+        if (getContext() == null) return;
+        Toast.makeText(getContext(), "Requesting Device Code from GitHub...", Toast.LENGTH_SHORT).show();
+
+        oAuthService.requestDeviceCode(keyMgr.getGitHubClientId(), new GitHubOAuthService.DeviceCodeCallback() {
+            @Override
+            public void onDeviceCodeReceived(DeviceCodeResponse response) {
+                showDeviceCodeDialog(keyMgr, response);
+            }
+
+            @Override
+            public void onError(String errorMessage) {
+                if (getContext() != null) {
+                    Toast.makeText(getContext(), "Device Flow Error: " + errorMessage, Toast.LENGTH_LONG).show();
+                }
+            }
+        });
+    }
+
+    private void showDeviceCodeDialog(ApiKeyManager keyMgr, DeviceCodeResponse response) {
+        if (getContext() == null) return;
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(requireContext());
+        builder.setTitle("GitHub Device Sign-In");
+        builder.setMessage("Your 8-character activation code is:\n\n" + response.getUserCode() + "\n\n1. Copy the code\n2. Open the GitHub verification page\n3. Paste the code and authorize Vynara");
+        builder.setCancelable(false);
+
+        builder.setPositiveButton("Open GitHub", (dialog, which) -> {
+            ClipboardManager clipboard = (ClipboardManager) requireContext().getSystemService(Context.CLIPBOARD_SERVICE);
+            ClipData clip = ClipData.newPlainText("GitHub User Code", response.getUserCode());
+            if (clipboard != null) clipboard.setPrimaryClip(clip);
+            Toast.makeText(getContext(), "Code copied to clipboard!", Toast.LENGTH_SHORT).show();
+
+            Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(response.getVerificationUri()));
+            startActivity(browserIntent);
+        });
+
+        builder.setNegativeButton("Cancel", (dialog, which) -> {
+            oAuthService.cancelDeviceFlowPolling();
+            dialog.dismiss();
+        });
+
+        deviceCodeDialog = builder.create();
+        deviceCodeDialog.show();
+
+        // Start background polling
+        oAuthService.startDeviceFlowPolling(keyMgr.getGitHubClientId(), response.getDeviceCode(), response.getInterval(), response.getExpiresIn(), new GitHubOAuthService.DevicePollingCallback() {
+            @Override
+            public void onTokenReceived(String accessToken) {
+                if (deviceCodeDialog != null && deviceCodeDialog.isShowing()) {
+                    deviceCodeDialog.dismiss();
+                }
+
+                oAuthService.fetchUserProfile(accessToken, new GitHubOAuthService.UserProfileCallback() {
+                    @Override
+                    public void onSuccess(String login, String name, String avatarUrl) {
+                        keyMgr.saveGitHubUser(login, avatarUrl);
+                        keyMgr.saveGitHubConfig(keyMgr.getGitHubRepo(), accessToken, "vynara_generate");
+                        keyMgr.saveComputeProvider(CloudProvider.GITHUB_ACTIONS);
+                        updateGitHubAuthUI(keyMgr);
+                        if (etGithubPat != null) etGithubPat.setText(keyMgr.getMaskedGitHubPat());
+                        if (getContext() != null) {
+                            Toast.makeText(getContext(), "Signed in as @" + login + " successfully!", Toast.LENGTH_LONG).show();
+                        }
+                    }
+
+                    @Override
+                    public void onError(String errorMessage) {
+                        keyMgr.saveGitHubConfig(keyMgr.getGitHubRepo(), accessToken, "vynara_generate");
+                        updateGitHubAuthUI(keyMgr);
+                    }
+                });
+            }
+
+            @Override
+            public void onPending(String status) {}
+
+            @Override
+            public void onError(String errorMessage) {
+                if (deviceCodeDialog != null && deviceCodeDialog.isShowing()) {
+                    deviceCodeDialog.dismiss();
+                }
+                if (getContext() != null) {
+                    Toast.makeText(getContext(), "Device Flow: " + errorMessage, Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+    }
+
     private void fetchLiveModels(String apiKey, List<String> modelList, ArrayAdapter<String> modelAdapter, ApiKeyManager keyMgr, boolean showToast) {
         if (apiKey == null || apiKey.trim().isEmpty()) return;
         if (showToast && getContext() != null) {
             Toast.makeText(getContext(), "Fetching live models from Google Gemini API...", Toast.LENGTH_SHORT).show();
         }
 
-        // Lock user actions during async network transactions
         isUpdatingModels = true;
 
         new GeminiApiClient().fetchModels(apiKey.trim(), new GeminiApiClient.ApiCallback<List<AIModel>>() {
@@ -377,7 +532,6 @@ public class SettingsFragment extends Fragment {
                     keyMgr.saveSelectedModel(modelList.get(0));
                 }
 
-                // Safely clear the update flag after the programmatic layout selection is completed
                 if (spinnerModel != null) {
                     spinnerModel.post(() -> isUpdatingModels = false);
                 } else {
@@ -391,11 +545,22 @@ public class SettingsFragment extends Fragment {
 
             @Override
             public void onError(String errorMessage) {
-                isUpdatingModels = false; // Release lock so user can interact if call failed
+                isUpdatingModels = false;
                 if (showToast && getContext() != null) {
                     Toast.makeText(getContext(), "Failed to fetch live models: " + errorMessage, Toast.LENGTH_LONG).show();
                 }
             }
         });
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        if (oAuthService != null) {
+            oAuthService.cancelDeviceFlowPolling();
+        }
+        if (deviceCodeDialog != null && deviceCodeDialog.isShowing()) {
+            deviceCodeDialog.dismiss();
+        }
     }
 }
