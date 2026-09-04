@@ -2,9 +2,8 @@ package com.example.engine;
 
 import com.example.character.Bone;
 import com.example.character.Character;
+import com.example.character.CharacterSpecification;
 import com.example.character.Skeleton;
-import com.example.character.Skin;
-import com.example.character.SkinWeight;
 import com.example.utils.VynaraLogger;
 
 import org.json.JSONArray;
@@ -23,7 +22,6 @@ import java.util.List;
 import java.util.Map;
 
 public class GLTFImporter {
-    private static final String TAG = "GLTFImporter";
     private static final int GLB_MAGIC = 0x46546C67; // 'glTF' in ASCII Little-Endian
     private static final int CHUNK_TYPE_JSON = 0x4E4F534A; // 'JSON' in ASCII Little-Endian
     private static final int CHUNK_TYPE_BIN = 0x004E4942;  // 'BIN\0' in ASCII Little-Endian
@@ -75,7 +73,7 @@ public class GLTFImporter {
         int version = buffer.getInt();
         int totalLength = buffer.getInt();
 
-        VynaraLogger.i(TAG, "Parsing GLB binary version: " + version + ", total bytes: " + totalLength);
+        VynaraLogger.system("GLTFImporter: Parsing GLB binary version: " + version + ", bytes: " + totalLength);
 
         JSONObject jsonMetadata = null;
         byte[] binaryDataChunk = null;
@@ -125,20 +123,24 @@ public class GLTFImporter {
         if (materialsJson != null) {
             for (int i = 0; i < materialsJson.length(); i++) {
                 JSONObject matObj = materialsJson.getJSONObject(i);
-                Material material = new Material("mat_" + i);
+                float r = 0.8f, g = 0.8f, b = 0.8f;
+                float metallic = 0.1f, roughness = 0.5f;
 
                 JSONObject pbr = matObj.optJSONObject("pbrMetallicRoughness");
                 if (pbr != null) {
                     JSONArray baseColorArr = pbr.optJSONArray("baseColorFactor");
                     if (baseColorArr != null && baseColorArr.length() >= 3) {
-                        float r = (float) baseColorArr.getDouble(0);
-                        float g = (float) baseColorArr.getDouble(1);
-                        float b = (float) baseColorArr.getDouble(2);
-                        material.setColor(rgbToHex(r, g, b));
+                        r = (float) baseColorArr.getDouble(0);
+                        g = (float) baseColorArr.getDouble(1);
+                        b = (float) baseColorArr.getDouble(2);
                     }
-                    material.setMetallic((float) pbr.optDouble("metallicFactor", 0.0));
-                    material.setRoughness((float) pbr.optDouble("roughnessFactor", 0.5));
+                    metallic = (float) pbr.optDouble("metallicFactor", 0.0);
+                    roughness = (float) pbr.optDouble("roughnessFactor", 0.5);
                 }
+
+                Material material = new Material("mat_" + i, "Mat_" + i, r, g, b, 1.0f);
+                material.setMetallic(metallic);
+                material.setRoughness(roughness);
                 parsedMaterials.add(material);
             }
         }
@@ -147,35 +149,57 @@ public class GLTFImporter {
         if (meshesJson != null) {
             for (int m = 0; m < meshesJson.length(); m++) {
                 JSONObject meshObj = meshesJson.getJSONObject(m);
-                String meshName = meshObj.optString("name", "mesh_" + m);
                 JSONArray primitives = meshObj.optJSONArray("primitives");
 
                 if (primitives != null && primitives.length() > 0) {
                     JSONObject prim = primitives.getJSONObject(0);
                     JSONObject attributes = prim.optJSONObject("attributes");
 
-                    Mesh mesh = new Mesh(meshName);
+                    float[] positions = null;
+                    float[] normals = null;
+                    float[] uvs = null;
+                    short[] indices = null;
 
                     if (attributes != null) {
                         if (attributes.has("POSITION")) {
                             int posAccessorIdx = attributes.getInt("POSITION");
-                            float[] positions = readFloatAccessor(posAccessorIdx, accessorsJson, bufferViewsJson, binaryBuffer);
-                            mesh.setVertices(positions);
+                            positions = readFloatAccessor(posAccessorIdx, accessorsJson, bufferViewsJson, binaryBuffer);
                         }
 
                         if (attributes.has("NORMAL")) {
                             int normAccessorIdx = attributes.getInt("NORMAL");
-                            float[] normals = readFloatAccessor(normAccessorIdx, accessorsJson, bufferViewsJson, binaryBuffer);
-                            mesh.setNormals(normals);
+                            normals = readFloatAccessor(normAccessorIdx, accessorsJson, bufferViewsJson, binaryBuffer);
+                        }
+
+                        if (attributes.has("TEXCOORD_0")) {
+                            int uvAccessorIdx = attributes.getInt("TEXCOORD_0");
+                            uvs = readFloatAccessor(uvAccessorIdx, accessorsJson, bufferViewsJson, binaryBuffer);
                         }
                     }
 
                     if (prim.has("indices")) {
                         int indicesAccessorIdx = prim.getInt("indices");
-                        int[] indices = readIntAccessor(indicesAccessorIdx, accessorsJson, bufferViewsJson, binaryBuffer);
-                        mesh.setIndices(indices);
+                        indices = readShortAccessor(indicesAccessorIdx, accessorsJson, bufferViewsJson, binaryBuffer);
                     }
 
+                    if (positions == null) {
+                        positions = new float[]{-0.5f, 0, 0,  0.5f, 0, 0,  0, 1.0f, 0};
+                    }
+                    if (normals == null) {
+                        normals = new float[positions.length];
+                        for (int n = 0; n < normals.length; n += 3) {
+                            normals[n] = 0; normals[n+1] = 1.0f; normals[n+2] = 0;
+                        }
+                    }
+                    if (uvs == null) {
+                        uvs = new float[(positions.length / 3) * 2];
+                    }
+                    if (indices == null) {
+                        indices = new short[(short) (positions.length / 3)];
+                        for (short s = 0; s < indices.length; s++) indices[s] = s;
+                    }
+
+                    Mesh mesh = new Mesh(positions, normals, uvs, indices);
                     parsedMeshes.add(mesh);
                 }
             }
@@ -187,20 +211,20 @@ public class GLTFImporter {
         if (skinsJson != null && nodesJson != null) {
             for (int s = 0; s < skinsJson.length(); s++) {
                 JSONObject skinObj = skinsJson.getJSONObject(s);
-                String skinName = skinObj.optString("name", "skeleton_" + s);
                 JSONArray joints = skinObj.optJSONArray("joints");
 
                 if (joints != null && joints.length() > 0) {
-                    Skeleton skeleton = new Skeleton(skinName);
+                    Bone rootBone = null;
                     for (int j = 0; j < joints.length(); j++) {
                         int nodeIdx = joints.getInt(j);
                         JSONObject nodeObj = nodesJson.getJSONObject(nodeIdx);
                         String boneName = nodeObj.optString("name", "bone_" + nodeIdx);
 
-                        Bone bone = new Bone(boneName, nodeIdx);
-                        applyNodeTransformToBone(nodeObj, bone);
+                        Bone bone = new Bone("bone_" + nodeIdx, boneName);
                         boneNodeMap.put(nodeIdx, bone);
-                        skeleton.addBone(bone);
+                        if (j == 0) {
+                            rootBone = bone;
+                        }
                     }
 
                     for (int j = 0; j < joints.length(); j++) {
@@ -213,13 +237,15 @@ public class GLTFImporter {
                                 int childNodeIdx = children.getInt(c);
                                 Bone childBone = boneNodeMap.get(childNodeIdx);
                                 if (parentBone != null && childBone != null) {
-                                    childBone.setParent(parentBone);
                                     parentBone.addChild(childBone);
                                 }
                             }
                         }
                     }
-                    parsedSkeletons.add(skeleton);
+
+                    if (rootBone != null) {
+                        parsedSkeletons.add(new Skeleton(rootBone));
+                    }
                 }
             }
         }
@@ -233,17 +259,13 @@ public class GLTFImporter {
                     int meshIdx = nodeObj.getInt("mesh");
                     if (meshIdx < parsedMeshes.size()) {
                         Mesh mesh = parsedMeshes.get(meshIdx);
-                        SceneObject sceneObject = new SceneObject(nodeName, mesh);
+                        Material mat = parsedMaterials.isEmpty() ? new Material("mat_def", "Default", 0.8f, 0.8f, 0.8f, 1.0f) : parsedMaterials.get(0);
+                        SceneObject sceneObject = new SceneObject("obj_" + n, nodeName, "MESH", mesh, mat);
                         applyNodeTransformToObject(nodeObj, sceneObject);
 
-                        if (parsedMaterials.size() > 0) {
-                            sceneObject.setMaterial(parsedMaterials.get(0));
-                        }
-
-                        if (nodeObj.has("skin") && parsedSkeletons.size() > 0) {
-                            Character character = new Character(nodeName);
-                            character.setMesh(mesh);
-                            character.setSkeleton(parsedSkeletons.get(0));
+                        if (nodeObj.has("skin") && !parsedSkeletons.isEmpty()) {
+                            CharacterSpecification spec = new CharacterSpecification("HUMANOID", nodeName);
+                            Character character = new Character("char_" + n, spec, sceneObject, parsedSkeletons.get(0));
                             characters.add(character);
                         } else {
                             sceneObjects.add(sceneObject);
@@ -255,15 +277,13 @@ public class GLTFImporter {
 
         if (sceneObjects.isEmpty() && characters.isEmpty() && !parsedMeshes.isEmpty()) {
             for (int i = 0; i < parsedMeshes.size(); i++) {
-                SceneObject obj = new SceneObject("imported_object_" + i, parsedMeshes.get(i));
-                if (i < parsedMaterials.size()) {
-                    obj.setMaterial(parsedMaterials.get(i));
-                }
+                Material mat = parsedMaterials.isEmpty() ? new Material("mat_def", "Default", 0.8f, 0.8f, 0.8f, 1.0f) : parsedMaterials.get(0);
+                SceneObject obj = new SceneObject("imported_obj_" + i, "Imported Mesh " + i, "MESH", parsedMeshes.get(i), mat);
                 sceneObjects.add(obj);
             }
         }
 
-        VynaraLogger.i(TAG, "Import completed: " + sceneObjects.size() + " static objects, " + characters.size() + " rigged characters.");
+        VynaraLogger.system("GLTFImporter: Import complete (" + sceneObjects.size() + " objects, " + characters.size() + " rigged characters)");
         return new ImportResult(sceneObjects, characters);
     }
 
@@ -289,7 +309,7 @@ public class GLTFImporter {
         return result;
     }
 
-    private static int[] readIntAccessor(int accessorIndex, JSONArray accessors, JSONArray bufferViews, byte[] binaryData) throws Exception {
+    private static short[] readShortAccessor(int accessorIndex, JSONArray accessors, JSONArray bufferViews, byte[] binaryData) throws Exception {
         JSONObject accessor = accessors.getJSONObject(accessorIndex);
         int count = accessor.getInt("count");
         int componentType = accessor.getInt("componentType");
@@ -299,19 +319,19 @@ public class GLTFImporter {
         JSONObject bufferView = bufferViews.getJSONObject(bufferViewIndex);
         int viewByteOffset = bufferView.optInt("byteOffset", 0);
 
-        int[] result = new int[count];
+        short[] result = new short[count];
         ByteBuffer bb = ByteBuffer.wrap(binaryData).order(ByteOrder.LITTLE_ENDIAN);
         bb.position(viewByteOffset + byteOffset);
 
         for (int i = 0; i < count; i++) {
             if (componentType == 5123) { // UNSIGNED_SHORT
-                result[i] = bb.getShort() & 0xFFFF;
+                result[i] = (short) (bb.getShort() & 0xFFFF);
             } else if (componentType == 5125) { // UNSIGNED_INT
-                result[i] = bb.getInt();
+                result[i] = (short) bb.getInt();
             } else if (componentType == 5121) { // UNSIGNED_BYTE
-                result[i] = bb.get() & 0xFF;
+                result[i] = (short) (bb.get() & 0xFF);
             } else {
-                result[i] = bb.getShort() & 0xFFFF;
+                result[i] = bb.getShort();
             }
         }
         return result;
@@ -351,24 +371,6 @@ public class GLTFImporter {
                     (float) scale.optDouble(2, 1.0)
             );
         }
-    }
-
-    private static void applyNodeTransformToBone(JSONObject nodeObj, Bone bone) {
-        JSONArray translation = nodeObj.optJSONArray("translation");
-        if (translation != null && translation.length() >= 3) {
-            bone.setLocalPosition(
-                    (float) translation.optDouble(0, 0.0),
-                    (float) translation.optDouble(1, 0.0),
-                    (float) translation.optDouble(2, 0.0)
-            );
-        }
-    }
-
-    private static String rgbToHex(float r, float g, float b) {
-        int ir = Math.min(255, Math.max(0, (int) (r * 255)));
-        int ig = Math.min(255, Math.max(0, (int) (g * 255)));
-        int ib = Math.min(255, Math.max(0, (int) (b * 255)));
-        return String.format("#%02X%02X%02X", ir, ig, ib);
     }
 
     private static byte[] readAllBytes(InputStream inputStream) throws Exception {
