@@ -27,7 +27,6 @@ import okhttp3.Response;
 import okhttp3.ResponseBody;
 
 public class GitHubWorkflowBridge {
-    private static final String TAG = "GitHubWorkflowBridge";
     private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
     private static final int DEFAULT_TIMEOUT_SECONDS = 60;
 
@@ -141,12 +140,12 @@ public class GitHubWorkflowBridge {
                     .post(body)
                     .build();
 
-            VynaraLogger.i(TAG, "Dispatching workflow to: " + dispatchUrl + " with assetId: " + assetId);
+            VynaraLogger.system("GitHubWorkflowBridge: Dispatching workflow to: " + dispatchUrl + " with assetId: " + assetId);
 
             httpClient.newCall(request).enqueue(new Callback() {
                 @Override
                 public void onFailure(Call call, IOException e) {
-                    VynaraLogger.e(TAG, "Workflow dispatch failed: " + e.getMessage(), e);
+                    VynaraLogger.e("Workflow dispatch failed: " + e.getMessage(), e);
                     mainHandler.post(() -> callback.onError("Failed to dispatch workflow: " + e.getMessage()));
                 }
 
@@ -154,11 +153,11 @@ public class GitHubWorkflowBridge {
                 public void onResponse(Call call, Response response) {
                     try {
                         if (response.code() == 204 || response.isSuccessful()) {
-                            VynaraLogger.i(TAG, "Workflow dispatched successfully (HTTP " + response.code() + ")");
+                            VynaraLogger.system("GitHubWorkflowBridge: Workflow dispatched successfully (HTTP " + response.code() + ")");
                             mainHandler.post(() -> callback.onDispatched(eventType, assetId));
                         } else {
                             String err = "GitHub returned HTTP " + response.code() + " (" + response.message() + ")";
-                            VynaraLogger.e(TAG, err, null);
+                            VynaraLogger.e(err);
                             mainHandler.post(() -> callback.onError(err));
                         }
                     } finally {
@@ -326,7 +325,7 @@ public class GitHubWorkflowBridge {
                 zis.closeEntry();
             }
         } catch (Exception e) {
-            VynaraLogger.e(TAG, "ZIP extraction error: " + e.getMessage(), e);
+            VynaraLogger.e("ZIP extraction error: " + e.getMessage(), e);
         }
         return false;
     }
