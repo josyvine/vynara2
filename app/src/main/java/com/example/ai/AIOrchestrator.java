@@ -95,12 +95,14 @@ public class AIOrchestrator {
                 "- Tools are the ONLY executable operations. Tasks are concrete operations in the production plan.\n" +
                 "- You may reason using knowledge and capabilities, but you may execute ONLY registered tools.\n" +
                 "- When Cloud Workers (GitHub Actions / Hugging Face) are enabled or Target Engine is BLENDER_NATIVE, select `blender.cloud_generate` or `rig.auto_rig_cloud` as the primary geometry tool.\n" +
-                "- CRITICAL REQUIREMENTS FOR BLENDER PYTHON (`bpyScript` parameter in `blender.cloud_generate`):\n" +
-                "  1. NEVER generate a single primitive cube or plain placeholder box.\n" +
-                "  2. Write comprehensive, multi-object procedural Blender 4.x Python code that builds the ENTIRE requested scene in full detail.\n" +
-                "  3. For villas/architecture: construct foundation slabs, wall extrusions, glass windows (`Principled BSDF` transmission), door frames, wooden decks, swimming pool basins with cyan water materials, and ambient sunlight.\n" +
-                "  4. For furniture/vehicles: construct multi-part geometry with Bevel & Solidify modifiers, distinct PBR materials (metallic, leather, wood, fabric), and smooth shading.\n" +
-                "  5. ALWAYS import `os`, create output directory `import os; os.makedirs('output', exist_ok=True)`, and export the final 3D scene directly using:\n" +
+                "- CRITICAL PYTHON SYNTAX RULES FOR `bpyScript` in `blender.cloud_generate`:\n" +
+                "  1. Output clean multiline Python 3 code using standard newlines (\\n).\n" +
+                "  2. NEVER write code on a single line or concatenate statements using semicolons (;). Inline semicolon statement chaining causes fatal SyntaxError crashes in Blender.\n" +
+                "  3. NEVER generate a single primitive cube or plain placeholder box.\n" +
+                "  4. Write comprehensive, multi-object procedural Blender 4.x Python code that builds the ENTIRE requested scene in full detail.\n" +
+                "  5. For villas/architecture: construct foundation slabs, wall extrusions, glass windows (`Principled BSDF` transmission), door frames, wooden decks, swimming pool basins with cyan water materials, and ambient sunlight.\n" +
+                "  6. For furniture/vehicles: construct multi-part geometry with Bevel & Solidify modifiers, distinct PBR materials (metallic, leather, wood, fabric), and smooth shading.\n" +
+                "  7. ALWAYS import `os`, create output directory `import os; os.makedirs('output', exist_ok=True)`, and export the final 3D scene directly using:\n" +
                 "     `bpy.ops.export_scene.gltf(filepath='output/model.glb', export_format='GLB')`\n" +
                 "- Choose your commands strictly from the provided Authoritative Registered Commands manifest. Never invent Tool IDs.\n\n" +
                 providerContext + "\n" +
@@ -172,7 +174,7 @@ public class AIOrchestrator {
                 "5. For furniture/vehicles: construct multi-element models with Bevel modifiers, smooth shading, distinct material slots (metallic, leather, wood, fabric).\n" +
                 "6. CRITICAL MANDATORY STEP: Import `os`, create output directory `import os; os.makedirs('output', exist_ok=True)`, and export the final 3D scene directly to GLB format using:\n" +
                 "   `bpy.ops.export_scene.gltf(filepath='output/model.glb', export_format='GLB')`\n" +
-                "7. Return ONLY valid executable Python code without Markdown formatting backticks.";
+                "7. CRITICAL PYTHON FORMATTING RULE: Output clean multiline Python code with standard newlines (\\n). NEVER concatenate Python statements on a single line using semicolons (;). Return ONLY valid executable Python code without Markdown formatting backticks.";
 
         VynaraLogger.system("Generating Blender Python execution script via Gemini...");
         apiClient.generateBlenderScript(apiKeyManager.getApiKey(), apiKeyManager.getSelectedModel(), prompt + "\n" + blenderSystemInstruction, new GeminiApiClient.ApiCallback<String>() {
