@@ -1,10 +1,10 @@
 package com.example.character;
 
+import com.example.engine.Material;
 import com.example.engine.MaterialManager;
+import com.example.engine.Mesh;
 import com.example.engine.SceneObject;
 import com.example.engine.ThreeDEngine;
-import com.example.engine.generators.CreatureGenerator;
-import com.example.engine.generators.HumanoidGenerator;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -18,8 +18,8 @@ public class CharacterManager {
     }
 
     /**
-     * Phase 6 Alignment: Constructs a procedural humanoid character assembling 
-     * head, neck, torso, arms, legs, and feet geometry nodes instead of a single cube.
+     * Phase 6 Alignment: Constructs a rigged humanoid character container
+     * with standard bone hierarchy.
      */
     public Character createHumanoid(CharacterSpecification spec) {
         if (spec == null) {
@@ -30,8 +30,9 @@ public class CharacterManager {
         Skeleton skeleton = SkeletonBuilder.buildHumanoidSkeleton(spec.getHeight());
         MaterialManager matMgr = engine != null ? engine.getMaterialManager() : new MaterialManager();
 
-        // Generate procedural anatomical humanoid mesh node hierarchy
-        SceneObject characterMeshObj = HumanoidGenerator.generateHumanoidMesh(id, spec, matMgr);
+        Mesh baseMesh = createBaseCharacterMesh(spec.getHeight(), 0.5f, 0.3f);
+        Material mat = matMgr != null ? matMgr.getDefaultPBRMaterial() : new Material("mat_" + id, "CharMat", 0.2f, 0.6f, 0.9f, 1.0f);
+        SceneObject characterMeshObj = new SceneObject(id, spec.getName(), "CHARACTER", baseMesh, mat);
 
         if (engine != null && engine.getSceneManager() != null && engine.getSceneManager().getActiveScene() != null) {
             engine.getSceneManager().getActiveScene().addObject(characterMeshObj);
@@ -49,8 +50,8 @@ public class CharacterManager {
     }
 
     /**
-     * Phase 7 Alignment: Constructs procedural animal/creature body geometry
-     * for quadrupeds and birds instead of a single primitive cube.
+     * Phase 7 Alignment: Constructs a rigged creature/quadruped container
+     * with standard bone hierarchy.
      */
     public Character createCreature(CharacterSpecification spec) {
         if (spec == null) {
@@ -66,9 +67,9 @@ public class CharacterManager {
         }
 
         MaterialManager matMgr = engine != null ? engine.getMaterialManager() : new MaterialManager();
-
-        // Generate procedural creature body node hierarchy
-        SceneObject creatureMeshObj = CreatureGenerator.generateCreatureMesh(id, spec, matMgr);
+        Mesh baseMesh = createBaseCharacterMesh(1.0f, 0.8f, 1.2f);
+        Material mat = matMgr != null ? matMgr.getDefaultPBRMaterial() : new Material("mat_" + id, "CreatureMat", 0.8f, 0.5f, 0.2f, 1.0f);
+        SceneObject creatureMeshObj = new SceneObject(id, spec.getName(), "CREATURE", baseMesh, mat);
 
         if (engine != null && engine.getSceneManager() != null && engine.getSceneManager().getActiveScene() != null) {
             engine.getSceneManager().getActiveScene().addObject(creatureMeshObj);
@@ -82,6 +83,12 @@ public class CharacterManager {
 
         characterMap.put(id, character);
         return character;
+    }
+
+    public void registerCharacter(Character character) {
+        if (character != null && character.getId() != null) {
+            characterMap.put(character.getId(), character);
+        }
     }
 
     public Character getCharacter(String id) {
@@ -105,5 +112,49 @@ public class CharacterManager {
 
     public void clearCharacters() {
         characterMap.clear();
+    }
+
+    private Mesh createBaseCharacterMesh(float height, float width, float depth) {
+        float hw = width / 2.0f;
+        float hh = height / 2.0f;
+        float hd = depth / 2.0f;
+
+        float[] positions = new float[]{
+            -hw, 0,  hd,   hw, 0,  hd,   hw, height,  hd,  -hw, height,  hd,
+            -hw, 0, -hd,  -hw, height, -hd,   hw, height, -hd,   hw, 0, -hd,
+            -hw, height, -hd,  -hw, height,  hd,   hw, height,  hd,   hw, height, -hd,
+            -hw, 0, -hd,   hw, 0, -hd,   hw, 0,  hd,  -hw, 0,  hd,
+             hw, 0, -hd,   hw, height, -hd,   hw, height,  hd,   hw, 0,  hd,
+            -hw, 0, -hd,  -hw, 0,  hd,  -hw, height,  hd,  -hw, height, -hd
+        };
+
+        float[] normals = new float[]{
+             0,  0,  1,   0,  0,  1,   0,  0,  1,   0,  0,  1,
+             0,  0, -1,   0,  0, -1,   0,  0, -1,   0,  0, -1,
+             0,  1,  0,   0,  1,  0,   0,  1,  0,   0,  1,  0,
+             0, -1,  0,   0, -1,  0,   0, -1,  0,   0, -1,  0,
+             1,  0,  0,   1,  0,  0,   1,  0,  0,   1,  0,  0,
+            -1,  0,  0,  -1,  0,  0,  -1,  0,  0,  -1,  0,  0
+        };
+
+        float[] uvs = new float[]{
+            0,0, 1,0, 1,1, 0,1,
+            1,0, 1,1, 0,1, 0,0,
+            0,1, 0,0, 1,0, 1,1,
+            1,1, 0,1, 0,0, 1,0,
+            1,0, 1,1, 0,1, 0,0,
+            0,0, 1,0, 1,1, 0,1
+        };
+
+        short[] indices = new short[]{
+             0,  1,  2,   0,  2,  3,
+             4,  5,  6,   4,  6,  7,
+             8,  9, 10,   8, 10, 11,
+            12, 13, 14,  12, 14, 15,
+            16, 17, 18,  16, 18, 19,
+            20, 21, 22,  20, 22, 23
+        };
+
+        return new Mesh(positions, normals, uvs, indices);
     }
 }
