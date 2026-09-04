@@ -12,7 +12,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public class VynaraLogger {
 
     public enum LogTag {
-        SYSTEM, GEMINI, AI, KNOWLEDGE, TOOL_MANIFEST, VALIDATOR, MAPPER, TASK, EXECUTION, GENERATOR, MATERIAL, VALIDATION
+        SYSTEM, GEMINI, AI, KNOWLEDGE, TOOL_MANIFEST, VALIDATOR, MAPPER, TASK, EXECUTION, GENERATOR, MATERIAL, VALIDATION, CLOUD
     }
 
     public enum LogLevel {
@@ -78,6 +78,8 @@ public class VynaraLogger {
     public static void material(String msg) { log(LogTag.MATERIAL, LogLevel.INFO, msg); }
     
     public static void validation(LogLevel level, String msg) { log(LogTag.VALIDATION, level, msg); }
+    public static void cloud(String msg) { log(LogTag.CLOUD, LogLevel.INFO, msg); }
+    public static void cloud(LogLevel level, String msg) { log(LogTag.CLOUD, level, msg); }
 
     // General purpose error logging methods required by background execution and orchestration layers
     public static void e(String msg) {
