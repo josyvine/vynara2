@@ -35,17 +35,25 @@ jobs:
         run: |
           mkdir -p output
           
-          # Safely write the Python script using Python to preserve multiline indentation and escaping
-          python3 -c "import os; script = os.environ.get('BPY_SCRIPT', ''); open('run_task.py', 'w').write(script)"
-          
-          # Enforce output directory creation and GLB export if missing in the script
-          python3 -c "
-          with open('run_task.py', 'r+') as f:
-              content = f.read()
-              if 'export_scene.gltf' not in content:
-                  f.seek(0, 2)
-                  f.write('\nimport os\nimport bpy\nos.makedirs(\"output\", exist_ok=True)\nbpy.ops.export_scene.gltf(filepath=\"output/model.glb\", export_format=\"GLB\")\n')
-          "
+          # Write the Python script using a quoted heredoc to prevent bash string mangling and preserve formatting
+          python3 - << 'EOF'
+          import os
+
+          bpy_script = os.environ.get('BPY_SCRIPT', '')
+
+          # Fallback script if payload script is empty
+          if not bpy_script.strip():
+              bpy_script = "import bpy\nimport os\nos.makedirs('output', exist_ok=True)\nbpy.ops.mesh.primitive_cube_add(size=2)\nbpy.ops.export_scene.gltf(filepath='output/model.glb', export_format='GLB')\n"
+
+          # Write clean script to run_task.py
+          with open('run_task.py', 'w', encoding='utf-8') as f:
+              f.write(bpy_script)
+              if not bpy_script.endswith('\n'):
+                  f.write('\n')
+              if 'export_scene.gltf' not in bpy_script:
+                  f.write("import os\nimport bpy\nos.makedirs('output', exist_ok=True)\nbpy.ops.export_scene.gltf(filepath='output/model.glb', export_format='GLB')\n")
+
+          EOF
 
           # Run headless Blender
           /opt/blender/blender -b -P run_task.py
