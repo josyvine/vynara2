@@ -1,100 +1,390 @@
 package com.example.engine;
 
+import android.opengl.GLES20;
+import android.opengl.GLSurfaceView;
 import android.opengl.Matrix;
 
-public class Camera {
-    private float[] eye = new float[] { 0f, 4f, 8f };
-    private float[] target = new float[] { 0f, 1f, 0f };
-    private float[] up = new float[] { 0f, 1f, 0f };
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
-    private float fov = 45f;
-    private float near = 0.1f;
-    private float far = 100f;
-    private int viewportWidth = 1080;
-    private int viewportHeight = 1920;
+import javax.microedition.khronos.egl.EGLConfig;
+import javax.microedition.khronos.opengles.GL10;
 
-    private final float[] viewMatrix = new float[16];
-    private final float[] projectionMatrix = new float[16];
-    private final float[] viewProjectionMatrix = new float[16];
+public class StudioGLRenderer implements GLSurfaceView.Renderer {
+    private final SceneManager sceneManager;
+    private final CameraManager cameraManager;
+    private final LightManager lightManager;
 
-    public Camera() {
-        updateViewMatrix();
-        updateProjectionMatrix(viewportWidth, viewportHeight);
+    private int programHandle;
+    private int uMVPMatrixHandle;
+    private int uModelMatrixHandle;
+    private int uColorHandle;
+    private int uLightPosHandle;
+    private int uLightColorHandle;
+    private int uAmbientColorHandle;
+    private int uCameraPosHandle;
+    private int uMetallicHandle;
+    private int uRoughnessHandle;
+    private int uEmissionHandle;
+    private int uIsSelectedHandle;
+    private int uTimeHandle;
+    private int uIsWaterHandle;
+
+    private int aPositionHandle;
+    private int aNormalHandle;
+    private int aTexCoordHandle;
+
+    // Runtime clock tracking for procedural shaders
+    private float runTime = 0.0f;
+
+    // Studio Grid Buffer
+    private FloatBuffer gridBuffer;
+    private int gridVertexCount = 0;
+
+    private final float[] mvpMatrix = new float[16];
+
+    private final String vertexShaderCode =
+            "uniform mat4 uMVPMatrix;\n" +
+            "uniform mat4 uModelMatrix;\n" +
+            "attribute vec4 aPosition;\n" +
+            "attribute vec3 aNormal;\n" +
+            "attribute vec2 aTexCoord;\n" +
+            "varying vec3 vNormal;\n" +
+            "varying vec3 vFragPos;\n" +
+            "varying vec2 vTexCoord;\n" +
+            "void main() {\n" +
+            "    vFragPos = vec3(uModelMatrix * aPosition);\n" +
+            "    vNormal = normalize(mat3(uModelMatrix) * aNormal);\n" +
+            "    vTexCoord = aTexCoord;\n" +
+            "    gl_Position = uMVPMatrix * aPosition;\n" +
+            "}\n";
+
+    private final String fragmentShaderCode =
+            "precision mediump float;\n" +
+            "varying vec3 vNormal;\n" +
+            "varying vec3 vFragPos;\n" +
+            "varying vec2 vTexCoord;\n" +
+            "uniform vec4 uColor;\n" +
+            "uniform vec3 uLightPos;\n" +
+            "uniform vec3 uLightColor;\n" +
+            "uniform vec3 uAmbientColor;\n" +
+            "uniform vec3 uCameraPos;\n" +
+            "uniform float uMetallic;\n" +
+            "uniform float uRoughness;\n" +
+            "uniform vec4 uEmission;\n" +
+            "uniform float uIsSelected;\n" +
+            "uniform float uTime;\n" +
+            "uniform float uIsWater;\n" +
+            "void main() {\n" +
+            "    vec3 norm = normalize(vNormal);\n" +
+            "    if (!gl_FrontFacing) {\n" +
+            "        norm = -norm;\n" +
+            "    }\n" +
+            "    vec3 viewDir = normalize(uCameraPos - vFragPos);\n" +
+            "    \n" +
+            "    // Dynamic procedural water wave calculations\n" +
+            "    if (uIsWater > 0.5) {\n" +
+            "        float waveX = sin(vFragPos.x * 3.0 + uTime * 2.5) * 0.12;\n" +
+            "        float waveZ = cos(vFragPos.z * 3.0 + uTime * 2.0) * 0.12;\n" +
+            "        norm = normalize(norm + vec3(waveX, 0.0, waveZ));\n" +
+            "    }\n" +
+            "    \n" +
+            "    vec3 lightDir = normalize(uLightPos - vFragPos);\n" +
+            "    vec3 halfDir = normalize(lightDir + viewDir);\n" +
+            "    \n" +
+            "    // Diffuse Reflection with soft wrap\n" +
+            "    float diff = max(dot(norm, lightDir), 0.0) + 0.15 * max(dot(-norm, lightDir), 0.0);\n" +
+            "    vec3 diffuse = diff * uLightColor;\n" +
+            "    \n" +
+            "    // Specular Reflection (Cook-Torrance Approximation)\n" +
+            "    float specAngle = max(dot(norm, halfDir), 0.0);\n" +
+            "    float specPower = mix(8.0, 128.0, 1.0 - uRoughness);\n" +
+            "    float spec = pow(specAngle, specPower) * uMetallic;\n" +
+            "    vec3 specular = spec * uLightColor;\n" +
+            "    \n" +
+            "    // Ambient & Emission\n" +
+            "    vec3 ambient = uAmbientColor * uColor.rgb;\n" +
+            "    vec3 finalColor = ambient + uColor.rgb * diffuse + specular + uEmission.rgb * uEmission.a;\n" +
+            "    \n" +
+            "    // Dynamic Fresnel factor for water transmission\n" +
+            "    if (uIsWater > 0.5) {\n" +
+            "        float fresnel = pow(1.0 - max(dot(norm, viewDir), 0.0), 3.0);\n" +
+            "        // Blend from transparent pool turquoise to reflective sky-blue\n" +
+            "        vec3 waterColor = mix(vec3(0.12, 0.65, 0.95), vec3(0.05, 0.35, 0.75), fresnel);\n" +
+            "        finalColor = waterColor + specular;\n" +
+            "    }\n" +
+            "    \n" +
+            "    // Cyan Highlight Overlay when Selected\n" +
+            "    if (uIsSelected > 0.5) {\n" +
+            "        finalColor = mix(finalColor, vec3(0.0, 0.9, 1.0), 0.4);\n" +
+            "    }\n" +
+            "    \n" +
+            "    float alpha = uIsWater > 0.5 ? 0.65 : uColor.a; // Maintain pool translucency\n" +
+            "    gl_FragColor = vec4(finalColor, alpha);\n" +
+            "}\n";
+
+    public StudioGLRenderer(SceneManager sceneManager, CameraManager cameraManager, LightManager lightManager) {
+        this.sceneManager = sceneManager;
+        this.cameraManager = cameraManager;
+        this.lightManager = lightManager;
+        initGridBuffer();
     }
 
-    public void updateViewMatrix() {
-        Matrix.setLookAtM(viewMatrix, 0, eye[0], eye[1], eye[2], target[0], target[1], target[2], up[0], up[1], up[2]);
-        updateViewProjectionMatrix();
+    private void initGridBuffer() {
+        int gridSize = 24;
+        float[] gridVertices = new float[(gridSize * 2 + 1) * 4 * 3];
+        int idx = 0;
+        for (int i = -gridSize; i <= gridSize; i++) {
+            // X lines
+            gridVertices[idx++] = -gridSize; gridVertices[idx++] = 0f; gridVertices[idx++] = i;
+            gridVertices[idx++] = gridSize;  gridVertices[idx++] = 0f; gridVertices[idx++] = i;
+            // Z lines
+            gridVertices[idx++] = i; gridVertices[idx++] = 0f; gridVertices[idx++] = -gridSize;
+            gridVertices[idx++] = i; gridVertices[idx++] = 0f; gridVertices[idx++] = gridSize;
+        }
+        gridVertexCount = gridVertices.length / 3;
+
+        ByteBuffer bb = ByteBuffer.allocateDirect(gridVertices.length * 4);
+        bb.order(ByteOrder.nativeOrder());
+        gridBuffer = bb.asFloatBuffer();
+        gridBuffer.put(gridVertices);
+        gridBuffer.position(0);
     }
 
-    public void updateProjectionMatrix(int width, int height) {
-        this.viewportWidth = width > 0 ? width : 1;
-        this.viewportHeight = height > 0 ? height : 1;
-        float aspect = (float) this.viewportWidth / (float) this.viewportHeight;
-        Matrix.perspectiveM(projectionMatrix, 0, fov, aspect, near, far);
-        updateViewProjectionMatrix();
+    @Override
+    public void onSurfaceCreated(GL10 gl, EGLConfig config) {
+        GLES20.glClearColor(0.07f, 0.08f, 0.11f, 1.0f); // Dark studio canvas #12131C
+        GLES20.glEnable(GLES20.GL_DEPTH_TEST);
+        GLES20.glEnable(GLES20.GL_BLEND);
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA);
+
+        int vertexShader = loadShader(GLES20.GL_VERTEX_SHADER, vertexShaderCode);
+        int fragmentShader = loadShader(GLES20.GL_FRAGMENT_SHADER, fragmentShaderCode);
+
+        programHandle = GLES20.glCreateProgram();
+        GLES20.glAttachShader(programHandle, vertexShader);
+        GLES20.glAttachShader(programHandle, fragmentShader);
+        GLES20.glLinkProgram(programHandle);
+
+        uMVPMatrixHandle = GLES20.glGetUniformLocation(programHandle, "uMVPMatrix");
+        uModelMatrixHandle = GLES20.glGetUniformLocation(programHandle, "uModelMatrix");
+        uColorHandle = GLES20.glGetUniformLocation(programHandle, "uColor");
+        uLightPosHandle = GLES20.glGetUniformLocation(programHandle, "uLightPos");
+        uLightColorHandle = GLES20.glGetUniformLocation(programHandle, "uLightColor");
+        uAmbientColorHandle = GLES20.glGetUniformLocation(programHandle, "uAmbientColor");
+        uCameraPosHandle = GLES20.glGetUniformLocation(programHandle, "uCameraPos");
+        uMetallicHandle = GLES20.glGetUniformLocation(programHandle, "uMetallic");
+        uRoughnessHandle = GLES20.glGetUniformLocation(programHandle, "uRoughness");
+        uEmissionHandle = GLES20.glGetUniformLocation(programHandle, "uEmission");
+        uIsSelectedHandle = GLES20.glGetUniformLocation(programHandle, "uIsSelected");
+        uTimeHandle = GLES20.glGetUniformLocation(programHandle, "uTime");
+        uIsWaterHandle = GLES20.glGetUniformLocation(programHandle, "uIsWater");
+
+        aPositionHandle = GLES20.glGetAttribLocation(programHandle, "aPosition");
+        aNormalHandle = GLES20.glGetAttribLocation(programHandle, "aNormal");
+        aTexCoordHandle = GLES20.glGetAttribLocation(programHandle, "aTexCoord");
     }
 
-    private void updateViewProjectionMatrix() {
-        Matrix.multiplyMM(viewProjectionMatrix, 0, projectionMatrix, 0, viewMatrix, 0);
+    @Override
+    public void onSurfaceChanged(GL10 gl, int width, int height) {
+        GLES20.glViewport(0, 0, width, height);
+        cameraManager.getActiveCamera().updateProjectionMatrix(width, height);
     }
 
-    public void setEye(float x, float y, float z) {
-        eye[0] = x; eye[1] = y; eye[2] = z;
-        updateViewMatrix();
+    @Override
+    public void onDrawFrame(GL10 gl) {
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT | GLES20.GL_DEPTH_BUFFER_BIT);
+        GLES20.glUseProgram(programHandle);
+
+        Camera camera = cameraManager.getActiveCamera();
+        float[] viewMatrix = camera.getViewMatrix();
+        float[] projMatrix = camera.getProjectionMatrix();
+        float[] cameraEye = camera.getEye();
+
+        GLES20.glUniform3fv(uCameraPosHandle, 1, cameraEye, 0);
+
+        // Update runtime frame time tick
+        runTime += 0.016f; // Increments smoothly at ~60 FPS
+        GLES20.glUniform1f(uTimeHandle, runTime);
+
+        // Bind Lighting Uniforms
+        Light mainLight = lightManager.getPrimaryDirectionalLight();
+        Light ambientLight = lightManager.getAmbientLight();
+
+        if (mainLight != null) {
+            GLES20.glUniform3fv(uLightPosHandle, 1, mainLight.getPosition(), 0);
+            GLES20.glUniform3f(uLightColorHandle, 
+                    mainLight.getColorRGB()[0] * mainLight.getIntensity(),
+                    mainLight.getColorRGB()[1] * mainLight.getIntensity(),
+                    mainLight.getColorRGB()[2] * mainLight.getIntensity());
+        } else {
+            GLES20.glUniform3f(uLightPosHandle, 8f, 15f, 10f);
+            GLES20.glUniform3f(uLightColorHandle, 1f, 1f, 1f);
+        }
+
+        if (ambientLight != null) {
+            GLES20.glUniform3f(uAmbientColorHandle, 
+                    ambientLight.getColorRGB()[0] * ambientLight.getIntensity(),
+                    ambientLight.getColorRGB()[1] * ambientLight.getIntensity(),
+                    ambientLight.getColorRGB()[2] * ambientLight.getIntensity());
+        } else {
+            GLES20.glUniform3f(uAmbientColorHandle, 0.3f, 0.3f, 0.35f);
+        }
+
+        // 1. Render Ground Grid (Opaque pass)
+        drawGrid(viewMatrix, projMatrix);
+
+        // 2. Render Active 3D Scene Graph Nodes (Sorting translucent nodes for correct blending)
+        Scene scene = sceneManager.getActiveScene();
+        if (scene != null) {
+            List<SceneObject> flatList = scene.getFlatObjectList();
+            List<RenderTask> opaqueTasks = new ArrayList<>();
+            List<RenderTask> translucentTasks = new ArrayList<>();
+
+            for (SceneObject obj : flatList) {
+                if (obj.getMesh() == null || !obj.isVisible()) continue;
+                
+                float[] modelMatrix = obj.getTransform().getWorldMatrix(null);
+                boolean isTranslucent = obj.getMaterial() != null && obj.getMaterial().getOpacity() < 1.0f;
+                
+                RenderTask task = new RenderTask(obj, modelMatrix);
+                if (isTranslucent) {
+                    // Calculate distance to camera for back-to-front depth sorting
+                    float dx = obj.getTransform().getPx() - cameraEye[0];
+                    float dy = obj.getTransform().getPy() - cameraEye[1];
+                    float dz = obj.getTransform().getPz() - cameraEye[2];
+                    task.distanceToCamera = (float) Math.sqrt(dx*dx + dy*dy + dz*dz);
+                    translucentTasks.add(task);
+                } else {
+                    opaqueTasks.add(task);
+                }
+            }
+
+            // Opaque Pass (Depth Writing Enabled)
+            GLES20.glDepthMask(true);
+            for (RenderTask task : opaqueTasks) {
+                drawTask(task, viewMatrix, projMatrix);
+            }
+
+            // Depth-sorted Translucent Pass (Depth Writing Disabled)
+            Collections.sort(translucentTasks, (t1, t2) -> Float.compare(t2.distanceToCamera, t1.distanceToCamera));
+            GLES20.glDepthMask(false);
+            for (RenderTask task : translucentTasks) {
+                drawTask(task, viewMatrix, projMatrix);
+            }
+            GLES20.glDepthMask(true); // Re-enable depth write
+        }
     }
 
-    public void setTarget(float x, float y, float z) {
-        target[0] = x; target[1] = y; target[2] = z;
-        updateViewMatrix();
+    private void drawGrid(float[] viewMatrix, float[] projMatrix) {
+        float[] identity = new float[16];
+        Matrix.setIdentityM(identity, 0);
+
+        Matrix.multiplyMM(mvpMatrix, 0, viewMatrix, 0, identity, 0);
+        Matrix.multiplyMM(mvpMatrix, 0, projMatrix, 0, mvpMatrix, 0);
+
+        GLES20.glUniformMatrix4fv(uMVPMatrixHandle, 1, false, mvpMatrix, 0);
+        GLES20.glUniformMatrix4fv(uModelMatrixHandle, 1, false, identity, 0);
+        GLES20.glUniform4f(uColorHandle, 0.2f, 0.25f, 0.35f, 0.5f);
+        GLES20.glUniform1f(uMetallicHandle, 0.0f);
+        GLES20.glUniform1f(uRoughnessHandle, 1.0f);
+        GLES20.glUniform4f(uEmissionHandle, 0f, 0f, 0f, 0f);
+        GLES20.glUniform1f(uIsSelectedHandle, 0.0f);
+        GLES20.glUniform1f(uIsWaterHandle, 0.0f);
+
+        GLES20.glEnableVertexAttribArray(aPositionHandle);
+        GLES20.glVertexAttribPointer(aPositionHandle, 3, GLES20.GL_FLOAT, false, 0, gridBuffer);
+        GLES20.glDrawArrays(GLES20.GL_LINES, 0, gridVertexCount);
+        GLES20.glDisableVertexAttribArray(aPositionHandle);
     }
 
-    public void setUp(float x, float y, float z) {
-        up[0] = x; up[1] = y; up[2] = z;
-        updateViewMatrix();
+    private void drawTask(RenderTask task, float[] viewMatrix, float[] projMatrix) {
+        SceneObject obj = task.obj;
+        Mesh mesh = obj.getMesh();
+        float[] modelMatrix = task.modelMatrix;
+
+        Matrix.multiplyMM(mvpMatrix, 0, viewMatrix, 0, modelMatrix, 0);
+        Matrix.multiplyMM(mvpMatrix, 0, projMatrix, 0, mvpMatrix, 0);
+
+        GLES20.glUniformMatrix4fv(uMVPMatrixHandle, 1, false, mvpMatrix, 0);
+        GLES20.glUniformMatrix4fv(uModelMatrixHandle, 1, false, modelMatrix, 0);
+
+        // Bind Material Uniforms
+        Material mat = obj.getMaterial();
+        float isWater = 0.0f;
+
+        if (mat != null) {
+            float[] color = mat.getBaseColorRGBA();
+            GLES20.glUniform4f(uColorHandle, color[0], color[1], color[2], color[3]);
+            GLES20.glUniform1f(uMetallicHandle, mat.getMetallic());
+            GLES20.glUniform1f(uRoughnessHandle, mat.getRoughness());
+            
+            float[] emissiveRGB = mat.getEmissionRGB();
+            GLES20.glUniform4f(uEmissionHandle, emissiveRGB[0], emissiveRGB[1], emissiveRGB[2], mat.getEmissionIntensity());
+
+            // Broad check: activate wave simulation for any water, pool, or ocean material
+            String matId = mat.getId() != null ? mat.getId().toLowerCase() : "";
+            String matName = mat.getName() != null ? mat.getName().toLowerCase() : "";
+            if (matId.contains("water") || matId.contains("ocean") || matName.contains("water") || matName.contains("ocean")) {
+                isWater = 1.0f;
+            }
+        } else {
+            GLES20.glUniform4f(uColorHandle, 0.8f, 0.8f, 0.8f, 1.0f);
+            GLES20.glUniform1f(uMetallicHandle, 0.1f);
+            GLES20.glUniform1f(uRoughnessHandle, 0.5f);
+            GLES20.glUniform4f(uEmissionHandle, 0f, 0f, 0f, 0f);
+        }
+
+        GLES20.glUniform1f(uIsWaterHandle, isWater);
+        GLES20.glUniform1f(uIsSelectedHandle, obj.isSelected() ? 1.0f : 0.0f);
+
+        // Bind Buffers & Draw Mesh
+        if (mesh.getVertexBuffer() != null) {
+            GLES20.glEnableVertexAttribArray(aPositionHandle);
+            GLES20.glVertexAttribPointer(aPositionHandle, 3, GLES20.GL_FLOAT, false, 0, mesh.getVertexBuffer());
+        }
+
+        if (mesh.getNormalBuffer() != null) {
+            GLES20.glEnableVertexAttribArray(aNormalHandle);
+            GLES20.glVertexAttribPointer(aNormalHandle, 3, GLES20.GL_FLOAT, false, 0, mesh.getNormalBuffer());
+        }
+
+        // Bind and pipe UV Texture coordinates if they are present on the mesh
+        if (mesh.getTexBuffer() != null) {
+            GLES20.glEnableVertexAttribArray(aTexCoordHandle);
+            GLES20.glVertexAttribPointer(aTexCoordHandle, 2, GLES20.GL_FLOAT, false, 0, mesh.getTexBuffer());
+        }
+
+        if (mesh.getIndexBuffer() != null) {
+            GLES20.glDrawElements(GLES20.GL_TRIANGLES, mesh.getIndices().length, GLES20.GL_UNSIGNED_SHORT, mesh.getIndexBuffer());
+        } else if (mesh.getVertexBuffer() != null) {
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, mesh.getVertexCount());
+        }
+
+        GLES20.glDisableVertexAttribArray(aPositionHandle);
+        GLES20.glDisableVertexAttribArray(aNormalHandle);
+        GLES20.glDisableVertexAttribArray(aTexCoordHandle);
     }
 
-    public void setFov(float fovDegrees) {
-        this.fov = Math.max(10f, Math.min(120f, fovDegrees));
-        updateProjectionMatrix(viewportWidth, viewportHeight);
+    private int loadShader(int type, String shaderCode) {
+        int shader = GLES20.glCreateShader(type);
+        GLES20.glShaderSource(shader, shaderCode);
+        GLES20.glCompileShader(shader);
+        return shader;
     }
 
-    public void setClippingPlanes(float nearPlane, float farPlane) {
-        this.near = Math.max(0.01f, nearPlane);
-        this.far = Math.max(near + 1.0f, farPlane);
-        updateProjectionMatrix(viewportWidth, viewportHeight);
+    private static class RenderTask {
+        final SceneObject obj;
+        final float[] modelMatrix;
+        float distanceToCamera = 0.0f;
+
+        RenderTask(SceneObject obj, float[] modelMatrix) {
+            this.obj = obj;
+            this.modelMatrix = modelMatrix;
+        }
     }
-
-    /**
-     * Phase 16 Alignment: Frames camera eye and look target around a 3D bounding box.
-     */
-    public void frameBounds(float[] minBounds, float[] maxBounds) {
-        if (minBounds == null || maxBounds == null || minBounds.length < 3 || maxBounds.length < 3) return;
-
-        float centerX = (minBounds[0] + maxBounds[0]) / 2f;
-        float centerY = (minBounds[1] + maxBounds[1]) / 2f;
-        float centerZ = (minBounds[2] + maxBounds[2]) / 2f;
-
-        float sizeX = maxBounds[0] - minBounds[0];
-        float sizeY = maxBounds[1] - minBounds[1];
-        float sizeZ = maxBounds[2] - minBounds[2];
-        float maxExtent = Math.max(sizeX, Math.max(sizeY, sizeZ));
-
-        float distance = (float) (maxExtent / Math.tan(Math.toRadians(fov / 2.0)));
-        distance = Math.max(2.0f, distance * 1.5f);
-
-        setTarget(centerX, centerY, centerZ);
-        setEye(centerX, centerY + distance * 0.4f, centerZ + distance);
-    }
-
-    public float[] getEye() { return eye; }
-    public float[] getTarget() { return target; }
-    public float[] getUp() { return up; }
-    public float getFov() { return fov; }
-    public float getNear() { return near; }
-    public float getFar() { return far; }
-    
-    public float[] getViewMatrix() { return viewMatrix; }
-    public float[] getProjectionMatrix() { return projectionMatrix; }
-    public float[] getViewProjectionMatrix() { return viewProjectionMatrix; }
 }
