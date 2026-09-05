@@ -1,597 +1,509 @@
-package com.example.cloud;
+package com.example.ui;
 
-import android.content.Context;
-import android.os.Handler;
-import android.os.Looper;
+import android.opengl.GLSurfaceView;
+import android.os.Bundle;
+import android.view.LayoutInflater;
+import android.view.MotionEvent;
+import android.view.ScaleGestureDetector;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ImageButton;
+import android.widget.SeekBar;
+import android.widget.TextView;
+import android.widget.Toast;
 
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.fragment.app.Fragment;
+
+import com.example.MainActivity;
+import com.example.R;
+import com.example.character.Character;
+import com.example.engine.Camera;
+import com.example.engine.GLTFImporter;
+import com.example.engine.Material;
+import com.example.engine.Scene;
+import com.example.engine.SceneObject;
+import com.example.engine.StudioGLRenderer;
+import com.example.engine.ThreeDEngine;
+import com.example.export.GLTFExporter;
+import com.example.runtime.ProjectRuntime;
 import com.example.utils.VynaraLogger;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-
-import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.text.SimpleDateFormat;
-import java.util.Locale;
-import java.util.TimeZone;
-import java.util.concurrent.TimeUnit;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
+import java.util.List;
 
-import okhttp3.Call;
-import okhttp3.Callback;
-import okhttp3.MediaType;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.RequestBody;
-import okhttp3.Response;
-import okhttp3.ResponseBody;
+public class StudioFragment extends Fragment {
 
-public class GitHubWorkflowBridge {
-    private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
-    private static final int DEFAULT_TIMEOUT_SECONDS = 60;
-    private static final long POLLING_INTERVAL_MS = 4000; // 4 seconds interval
-    private static final long MAX_POLLING_DURATION_MS = 300000; // 5 minutes timeout
-    private static final int MAX_ARTIFACT_RETRY_ATTEMPTS = 8; // 8 retries (20s window for run-specific artifact indexing)
-    private static final long ARTIFACT_RETRY_DELAY_MS = 2500; // 2.5 seconds between artifact retries
+    private GLSurfaceView glSurfaceView;
+    private StudioGLRenderer renderer;
+    private ProjectRuntime runtime;
+    private ThreeDEngine engine;
+    
+    private TextView tvStats;
+    private TextView tvSelectedInfo;
+    private TextView tvAnimTime;
+    private SeekBar seekbarTimeline;
+    private ImageButton btnAnimPlay;
+    private boolean isPlaying = false;
+    private android.os.Handler animHandler;
+    private Runnable animRunnable;
+    private ScaleGestureDetector scaleGestureDetector;
 
-    private final OkHttpClient httpClient;
-    private final Handler mainHandler;
-
-    public interface WorkflowDispatchCallback {
-        void onDispatched(String eventType, String assetId);
-        void onError(String errorMessage);
+    @Nullable
+    @Override
+    public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
+        return inflater.inflate(R.layout.fragment_studio, container, false);
     }
 
-    public interface ArtifactDownloadCallback {
-        void onProgress(int percentage, long bytesRead, long totalBytes);
-        void onSuccess(File downloadedFile);
-        void onError(String errorMessage);
-    }
+    @Override
+    public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
+        super.onViewCreated(view, savedInstanceState);
 
-    public interface ConnectionTestCallback {
-        void onSuccess(String repoFullName, boolean hasWorkflowAccess);
-        void onError(String errorMessage);
-    }
-
-    public interface WorkflowPollingCallback {
-        void onStatusUpdate(String status, String details);
-        void onProgress(int percentage, long bytesRead, long totalBytes);
-        void onSuccess(File downloadedFile);
-        void onError(String errorMessage);
-    }
-
-    public GitHubWorkflowBridge() {
-        this.httpClient = new OkHttpClient.Builder()
-                .connectTimeout(DEFAULT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                .readTimeout(DEFAULT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                .writeTimeout(DEFAULT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                .build();
-        this.mainHandler = new Handler(Looper.getMainLooper());
-    }
-
-    // --- Overloaded Context-Aware Methods (Auto-fetch Stored Token) ---
-
-    public void testConnection(Context context, String repository, ConnectionTestCallback callback) {
-        String token = GitHubOAuthService.getAccessToken(context);
-        testConnection(repository, token, callback);
-    }
-
-    public void dispatchGenerationWorkflow(Context context,
-                                           String repository,
-                                           String eventType,
-                                           String assetId,
-                                           String bpyScript,
-                                           WorkflowDispatchCallback callback) {
-        String token = GitHubOAuthService.getAccessToken(context);
-        dispatchGenerationWorkflow(repository, token, eventType, assetId, bpyScript, callback);
-    }
-
-    public void downloadWorkflowArtifact(Context context,
-                                         String repository,
-                                         String assetId,
-                                         File destinationFile,
-                                         ArtifactDownloadCallback callback) {
-        String token = GitHubOAuthService.getAccessToken(context);
-        downloadWorkflowArtifact(repository, token, assetId, destinationFile, callback);
-    }
-
-    public void awaitWorkflowAndDownloadArtifact(Context context,
-                                                String repository,
-                                                String assetId,
-                                                File destinationFile,
-                                                WorkflowPollingCallback callback) {
-        String token = GitHubOAuthService.getAccessToken(context);
-        awaitWorkflowAndDownloadArtifact(repository, token, assetId, destinationFile, callback);
-    }
-
-    // --- Standard Methods ---
-
-    public void testConnection(String repository, String personalAccessToken, ConnectionTestCallback callback) {
-        if (repository == null || repository.trim().isEmpty()) {
-            callback.onError("Repository cannot be empty. Format: owner/repo");
-            return;
-        }
-        if (personalAccessToken == null || personalAccessToken.trim().isEmpty()) {
-            callback.onError("GitHub Access Token is empty. Please sign in or provide a token.");
-            return;
+        // Phase 1 Alignment: Fetch the single, unified shared project runtime instance
+        if (getActivity() instanceof MainActivity) {
+            runtime = ((MainActivity) getActivity()).getProjectRuntime();
+        } else {
+            runtime = ProjectRuntime.getInstance(requireContext());
         }
 
-        String targetUrl = "https://api.github.com/repos/" + repository.trim();
+        engine = runtime.getEngine();
+        animHandler = new android.os.Handler(android.os.Looper.getMainLooper());
 
-        Request request = new Request.Builder()
-                .url(targetUrl)
-                .header("Authorization", "Bearer " + personalAccessToken.trim())
-                .header("Accept", "application/vnd.github+json")
-                .header("User-Agent", "Vynara-3D-Studio-Android")
-                .get()
-                .build();
+        glSurfaceView = view.findViewById(R.id.gl_surface_view);
+        tvStats = view.findViewById(R.id.tv_studio_poly_stats);
+        tvSelectedInfo = view.findViewById(R.id.tv_selected_object_info);
+        tvAnimTime = view.findViewById(R.id.tv_anim_time);
+        seekbarTimeline = view.findViewById(R.id.seekbar_timeline);
+        btnAnimPlay = view.findViewById(R.id.btn_anim_play);
 
-        httpClient.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onFailure(Call call, IOException e) {
-                mainHandler.post(() -> callback.onError("Network connection failure: " + e.getMessage()));
-            }
+        // Setup OpenGL ES 2.0 Viewport Renderer
+        glSurfaceView.setEGLContextClientVersion(2);
+        renderer = new StudioGLRenderer(engine.getSceneManager(), engine.getCameraManager(), engine.getLightManager());
+        glSurfaceView.setRenderer(renderer);
+        glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
 
-            @Override
-            public void onResponse(Call call, Response response) throws IOException {
-                try (ResponseBody responseBody = response.body()) {
-                    if (!response.isSuccessful() || responseBody == null) {
-                        String errorMsg = "GitHub API Error [" + response.code() + "]: " + response.message();
-                        mainHandler.post(() -> callback.onError(errorMsg));
-                        return;
-                    }
+        // Enable 360-degree Touch Viewport Camera Orbit Navigation with Pinch-to-Zoom
+        setupViewportTouchOrbitGesture();
 
-                    String jsonStr = responseBody.string();
-                    JSONObject repoObj = new JSONObject(jsonStr);
-                    String fullName = repoObj.optString("full_name", repository);
-                    JSONObject permissions = repoObj.optJSONObject("permissions");
-                    boolean hasPushAccess = permissions != null && (permissions.optBoolean("push", false) || permissions.optBoolean("admin", false));
+        updateStudioStatsUI();
 
-                    mainHandler.post(() -> callback.onSuccess(fullName, hasPushAccess));
-                } catch (Exception ex) {
-                    mainHandler.post(() -> callback.onError("Failed to parse repository response: " + ex.getMessage()));
+        // Phase 13 Alignment: Undo & Redo transaction history
+        View btnUndo = view.findViewById(R.id.btn_undo);
+        if (btnUndo != null) {
+            btnUndo.setOnClickListener(v -> {
+                if (runtime.getUndoManager().undo()) {
+                    updateStudioStatsUI();
+                    Toast.makeText(getContext(), "Undo Successful", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(getContext(), "Nothing to undo", Toast.LENGTH_SHORT).show();
                 }
-            }
-        });
-    }
-
-    public void dispatchGenerationWorkflow(String repository,
-                                           String personalAccessToken,
-                                           String eventType,
-                                           String assetId,
-                                           String bpyScript,
-                                           WorkflowDispatchCallback callback) {
-        if (repository == null || repository.trim().isEmpty() || personalAccessToken == null || personalAccessToken.trim().isEmpty()) {
-            callback.onError("GitHub credentials are not properly configured.");
-            return;
+            });
         }
 
-        String dispatchUrl = "https://api.github.com/repos/" + repository.trim() + "/dispatches";
-
-        try {
-            JSONObject clientPayload = new JSONObject();
-            clientPayload.put("asset_id", assetId);
-            clientPayload.put("bpy_script", bpyScript);
-            clientPayload.put("timestamp", System.currentTimeMillis());
-
-            JSONObject rootPayload = new JSONObject();
-            rootPayload.put("event_type", (eventType != null && !eventType.trim().isEmpty()) ? eventType : "vynara_generate");
-            rootPayload.put("client_payload", clientPayload);
-
-            RequestBody body = RequestBody.create(rootPayload.toString(), JSON_MEDIA_TYPE);
-
-            Request request = new Request.Builder()
-                    .url(dispatchUrl)
-                    .header("Authorization", "Bearer " + personalAccessToken.trim())
-                    .header("Accept", "application/vnd.github+json")
-                    .header("User-Agent", "Vynara-3D-Studio-Android")
-                    .post(body)
-                    .build();
-
-            VynaraLogger.system("GitHubWorkflowBridge: Dispatching workflow to: " + dispatchUrl + " with assetId: " + assetId);
-
-            httpClient.newCall(request).enqueue(new Callback() {
-                @Override
-                public void onFailure(Call call, IOException e) {
-                    VynaraLogger.e("Workflow dispatch failed: " + e.getMessage(), e);
-                    mainHandler.post(() -> callback.onError("Failed to dispatch workflow: " + e.getMessage()));
+        View btnRedo = view.findViewById(R.id.btn_redo);
+        if (btnRedo != null) {
+            btnRedo.setOnClickListener(v -> {
+                if (runtime.getRedoManager().redo()) {
+                    updateStudioStatsUI();
+                    Toast.makeText(getContext(), "Redo Successful", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(getContext(), "Nothing to redo", Toast.LENGTH_SHORT).show();
                 }
+            });
+        }
 
-                @Override
-                public void onResponse(Call call, Response response) {
-                    try {
-                        if (response.code() == 204 || response.isSuccessful()) {
-                            VynaraLogger.system("GitHubWorkflowBridge: Workflow dispatched successfully (HTTP " + response.code() + ")");
-                            mainHandler.post(() -> callback.onDispatched(eventType, assetId));
-                        } else {
-                            String err = "GitHub returned HTTP " + response.code() + " (" + response.message() + ")";
-                            VynaraLogger.e(err);
-                            mainHandler.post(() -> callback.onError(err));
-                        }
-                    } finally {
-                        response.close();
+        // Phase 18 Alignment: Real GLTF scene exporter
+        View btnExport = view.findViewById(R.id.btn_export_gltf);
+        if (btnExport != null) {
+            btnExport.setOnClickListener(v -> exportActiveSceneToLocalGltf());
+        }
+
+        // Viewport Transform Tool Controls
+        View btnSelect = view.findViewById(R.id.btn_tool_select);
+        if (btnSelect != null) {
+            btnSelect.setOnClickListener(v -> {
+                SceneObject selected = engine.getSceneManager().getSelectedObject();
+                if (selected != null) {
+                    tvSelectedInfo.setText("Selected: " + selected.getName() + " (" + selected.getSemanticType() + ")");
+                } else {
+                    List<SceneObject> objs = engine.getSceneManager().getAllObjects();
+                    if (!objs.isEmpty()) {
+                        engine.getSceneManager().selectObject(objs.get(0));
+                        tvSelectedInfo.setText("Selected: " + objs.get(0).getName());
+                    } else {
+                        tvSelectedInfo.setText("No object selected");
                     }
                 }
             });
-        } catch (Exception ex) {
-            callback.onError("Failed to assemble dispatch payload: " + ex.getMessage());
-        }
-    }
-
-    public void downloadWorkflowArtifact(String repository,
-                                         String personalAccessToken,
-                                         String assetId,
-                                         File destinationFile,
-                                         ArtifactDownloadCallback callback) {
-        String artifactsUrl = "https://api.github.com/repos/" + repository.trim() + "/actions/artifacts";
-
-        Request request = new Request.Builder()
-                .url(artifactsUrl)
-                .header("Authorization", "Bearer " + personalAccessToken.trim())
-                .header("Accept", "application/vnd.github+json")
-                .header("User-Agent", "Vynara-3D-Studio-Android")
-                .get()
-                .build();
-
-        httpClient.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onFailure(Call call, IOException e) {
-                mainHandler.post(() -> callback.onError("Artifact search failed: " + e.getMessage()));
-            }
-
-            @Override
-            public void onResponse(Call call, Response response) throws IOException {
-                try (ResponseBody responseBody = response.body()) {
-                    if (!response.isSuccessful() || responseBody == null) {
-                        mainHandler.post(() -> callback.onError("Failed to list artifacts: HTTP " + response.code()));
-                        return;
-                    }
-
-                    String json = responseBody.string();
-                    JSONObject root = new JSONObject(json);
-                    JSONArray artifacts = root.optJSONArray("artifacts");
-
-                    if (artifacts == null || artifacts.length() == 0) {
-                        mainHandler.post(() -> callback.onError("No build artifacts found in repository."));
-                        return;
-                    }
-
-                    String downloadLocationUrl = null;
-                    for (int i = 0; i < artifacts.length(); i++) {
-                        JSONObject artifact = artifacts.getJSONObject(i);
-                        String name = artifact.optString("name", "");
-                        if (name.equalsIgnoreCase(assetId) || name.contains(assetId) || name.equalsIgnoreCase("model")) {
-                            downloadLocationUrl = artifact.optString("archive_download_url", null);
-                            break;
-                        }
-                    }
-
-                    if (downloadLocationUrl == null) {
-                        mainHandler.post(() -> callback.onError("Artifact matching assetId '" + assetId + "' not ready yet."));
-                        return;
-                    }
-
-                    executeBinaryDownload(downloadLocationUrl, personalAccessToken, destinationFile, callback);
-                } catch (Exception ex) {
-                    mainHandler.post(() -> callback.onError("Failed to parse artifacts list: " + ex.getMessage()));
-                }
-            }
-        });
-    }
-
-    public void downloadWorkflowArtifactForRun(String repository,
-                                               String personalAccessToken,
-                                               long runId,
-                                               String assetId,
-                                               File destinationFile,
-                                               ArtifactDownloadCallback callback) {
-        String runArtifactsUrl = "https://api.github.com/repos/" + repository.trim() + "/actions/runs/" + runId + "/artifacts";
-
-        Request request = new Request.Builder()
-                .url(runArtifactsUrl)
-                .header("Authorization", "Bearer " + personalAccessToken.trim())
-                .header("Accept", "application/vnd.github+json")
-                .header("User-Agent", "Vynara-3D-Studio-Android")
-                .get()
-                .build();
-
-        httpClient.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onFailure(Call call, IOException e) {
-                mainHandler.post(() -> callback.onError("Run artifact search failed: " + e.getMessage()));
-            }
-
-            @Override
-            public void onResponse(Call call, Response response) throws IOException {
-                try (ResponseBody responseBody = response.body()) {
-                    if (!response.isSuccessful() || responseBody == null) {
-                        mainHandler.post(() -> callback.onError("Failed to list run artifacts: HTTP " + response.code()));
-                        return;
-                    }
-
-                    String json = responseBody.string();
-                    JSONObject root = new JSONObject(json);
-                    JSONArray artifacts = root.optJSONArray("artifacts");
-
-                    if (artifacts == null || artifacts.length() == 0) {
-                        mainHandler.post(() -> callback.onError("No artifacts produced for Run #" + runId));
-                        return;
-                    }
-
-                    String downloadLocationUrl = null;
-                    for (int i = 0; i < artifacts.length(); i++) {
-                        JSONObject artifact = artifacts.getJSONObject(i);
-                        String name = artifact.optString("name", "");
-                        if (name.equalsIgnoreCase(assetId) || name.contains(assetId) || name.equalsIgnoreCase("model") || artifacts.length() == 1) {
-                            downloadLocationUrl = artifact.optString("archive_download_url", null);
-                            break;
-                        }
-                    }
-
-                    if (downloadLocationUrl == null) {
-                        mainHandler.post(() -> callback.onError("Target GLB artifact not ready for Run #" + runId));
-                        return;
-                    }
-
-                    executeBinaryDownload(downloadLocationUrl, personalAccessToken, destinationFile, callback);
-                } catch (Exception ex) {
-                    mainHandler.post(() -> callback.onError("Failed to parse run artifacts: " + ex.getMessage()));
-                }
-            }
-        });
-    }
-
-    public void awaitWorkflowAndDownloadArtifact(String repository,
-                                                String personalAccessToken,
-                                                String assetId,
-                                                File destinationFile,
-                                                WorkflowPollingCallback callback) {
-        if (repository == null || repository.trim().isEmpty() || personalAccessToken == null || personalAccessToken.trim().isEmpty()) {
-            callback.onError("GitHub credentials are not properly configured.");
-            return;
         }
 
-        final long dispatchTimeMs = System.currentTimeMillis();
-        VynaraLogger.system("GitHubWorkflowBridge: Starting workflow execution monitoring for assetId: " + assetId);
+        View btnMove = view.findViewById(R.id.btn_tool_move);
+        if (btnMove != null) {
+            btnMove.setOnClickListener(v -> {
+                SceneObject selected = engine.getSceneManager().getSelectedObject();
+                if (selected != null) {
+                    runtime.getTransactionManager().beginTransaction("Translate Object");
+                    selected.getTransform().translate(0.5f, 0f, 0f);
+                    runtime.getTransactionManager().commitTransaction();
+                    Toast.makeText(getContext(), "Translated selected object (+0.5 X)", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(getContext(), "Please select an object first", Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
 
-        final Runnable[] pollRunnable = new Runnable[1];
-        pollRunnable[0] = new Runnable() {
+        View btnRotate = view.findViewById(R.id.btn_tool_rotate);
+        if (btnRotate != null) {
+            btnRotate.setOnClickListener(v -> {
+                SceneObject selected = engine.getSceneManager().getSelectedObject();
+                if (selected != null) {
+                    runtime.getTransactionManager().beginTransaction("Rotate Object");
+                    selected.getTransform().rotate(0f, 15f, 0f);
+                    runtime.getTransactionManager().commitTransaction();
+                    Toast.makeText(getContext(), "Rotated selected object (+15 deg Yaw)", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(getContext(), "Please select an object first", Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
+
+        View btnScale = view.findViewById(R.id.btn_tool_scale);
+        if (btnScale != null) {
+            btnScale.setOnClickListener(v -> {
+                SceneObject selected = engine.getSceneManager().getSelectedObject();
+                if (selected != null) {
+                    runtime.getTransactionManager().beginTransaction("Scale Object");
+                    selected.getTransform().scaleBy(1.1f, 1.1f, 1.1f);
+                    runtime.getTransactionManager().commitTransaction();
+                    Toast.makeText(getContext(), "Scaled selected object (+10% Uniform)", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(getContext(), "Please select an object first", Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
+
+        View btnHierarchy = view.findViewById(R.id.btn_tool_hierarchy);
+        if (btnHierarchy != null) {
+            btnHierarchy.setOnClickListener(v -> {
+                int totalObjects = engine.getSceneManager().getAllObjects().size();
+                int totalLights = engine.getLightManager().getLights().size();
+                Toast.makeText(getContext(), "Scene Graph: " + totalObjects + " Nodes, " + totalLights + " Lights, 1 Camera", Toast.LENGTH_LONG).show();
+            });
+        }
+
+        // Timeline and animation loop setup
+        animRunnable = new Runnable() {
             @Override
             public void run() {
-                if (System.currentTimeMillis() - dispatchTimeMs > MAX_POLLING_DURATION_MS) {
-                    VynaraLogger.e("GitHubWorkflowBridge: Workflow execution timed out after " + (MAX_POLLING_DURATION_MS / 1000) + "s");
-                    mainHandler.post(() -> callback.onError("GitHub Actions workflow execution timed out."));
-                    return;
-                }
-
-                String runsUrl = "https://api.github.com/repos/" + repository.trim() + "/actions/runs?per_page=10";
-
-                Request request = new Request.Builder()
-                        .url(runsUrl)
-                        .header("Authorization", "Bearer " + personalAccessToken.trim())
-                        .header("Accept", "application/vnd.github+json")
-                        .header("User-Agent", "Vynara-3D-Studio-Android")
-                        .get()
-                        .build();
-
-                httpClient.newCall(request).enqueue(new Callback() {
-                    @Override
-                    public void onFailure(Call call, IOException e) {
-                        VynaraLogger.e("Workflow status check failed: " + e.getMessage());
-                        mainHandler.postDelayed(pollRunnable[0], POLLING_INTERVAL_MS);
-                    }
-
-                    @Override
-                    public void onResponse(Call call, Response response) throws IOException {
-                        try (ResponseBody responseBody = response.body()) {
-                            if (!response.isSuccessful() || responseBody == null) {
-                                VynaraLogger.e("Workflow runs query failed: HTTP " + response.code());
-                                mainHandler.postDelayed(pollRunnable[0], POLLING_INTERVAL_MS);
-                                return;
+                if (isPlaying) {
+                    for (Character c : runtime.getCharacterManager().getCharacterMap().values()) {
+                        if (c.getAnimationPlayer() != null && c.getAnimationPlayer().isPlaying()) {
+                            c.getAnimationPlayer().update(0.033f);
+                            float seconds = c.getAnimationPlayer().getCurrentTimeSeconds();
+                            if (seekbarTimeline != null) {
+                                int progress = (int) ((seconds / 5.0f) * 100);
+                                seekbarTimeline.setProgress(progress);
                             }
-
-                            String json = responseBody.string();
-                            JSONObject root = new JSONObject(json);
-                            JSONArray runs = root.optJSONArray("workflow_runs");
-
-                            if (runs != null && runs.length() > 0) {
-                                JSONObject targetRun = null;
-
-                                SimpleDateFormat isoFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US);
-                                isoFormat.setTimeZone(TimeZone.getTimeZone("UTC"));
-
-                                for (int i = 0; i < runs.length(); i++) {
-                                    JSONObject r = runs.getJSONObject(i);
-                                    String createdAtStr = r.optString("created_at", "");
-                                    long runCreatedAtMs = 0;
-                                    try {
-                                        if (!createdAtStr.isEmpty()) {
-                                            runCreatedAtMs = isoFormat.parse(createdAtStr).getTime();
-                                        }
-                                    } catch (Exception ignored) {}
-
-                                    if (runCreatedAtMs >= (dispatchTimeMs - 15000)) {
-                                        targetRun = r;
-                                        break;
-                                    }
-                                }
-
-                                if (targetRun != null) {
-                                    String status = targetRun.optString("status", "unknown");
-                                    String conclusion = targetRun.optString("conclusion", "null");
-                                    long runId = targetRun.optLong("id", 0);
-
-                                    VynaraLogger.system("GitHubWorkflowBridge: Active Run #" + runId + " Status: " + status + " Conclusion: " + conclusion);
-                                    mainHandler.post(() -> callback.onStatusUpdate(status, "Run #" + runId + " [" + status + "]"));
-
-                                    if ("completed".equalsIgnoreCase(status)) {
-                                        if ("success".equalsIgnoreCase(conclusion)) {
-                                            VynaraLogger.system("GitHubWorkflowBridge: Workflow run #" + runId + " succeeded! Downloading run-specific artifact...");
-                                            mainHandler.post(() -> callback.onStatusUpdate("downloading", "Downloading GLB artifact..."));
-
-                                            pollAndDownloadArtifact(repository, personalAccessToken, runId, assetId, destinationFile, callback, 1, MAX_ARTIFACT_RETRY_ATTEMPTS);
-                                            return;
-                                        } else {
-                                            String failureMsg = "GitHub Workflow Run #" + runId + " failed with conclusion: " + conclusion;
-                                            VynaraLogger.e(failureMsg);
-                                            mainHandler.post(() -> callback.onError(failureMsg));
-                                            return;
-                                        }
-                                    }
-                                } else {
-                                    VynaraLogger.system("GitHubWorkflowBridge: Waiting for new workflow run to be queued by GitHub Actions...");
-                                    mainHandler.post(() -> callback.onStatusUpdate("queued", "Waiting for worker to start..."));
-                                }
-                            }
-
-                            mainHandler.postDelayed(pollRunnable[0], POLLING_INTERVAL_MS);
-
-                        } catch (Exception ex) {
-                            VynaraLogger.e("Error parsing workflow status: " + ex.getMessage(), ex);
-                            mainHandler.postDelayed(pollRunnable[0], POLLING_INTERVAL_MS);
                         }
                     }
-                });
+                    animHandler.postDelayed(this, 33);
+                }
             }
         };
 
-        mainHandler.post(pollRunnable[0]);
-    }
-
-    private void pollAndDownloadArtifact(String repository,
-                                         String personalAccessToken,
-                                         long runId,
-                                         String assetId,
-                                         File destinationFile,
-                                         WorkflowPollingCallback callback,
-                                         int attempt,
-                                         int maxAttempts) {
-        downloadWorkflowArtifactForRun(repository, personalAccessToken, runId, assetId, destinationFile, new ArtifactDownloadCallback() {
-            @Override
-            public void onProgress(int percentage, long bytesRead, long totalBytes) {
-                callback.onProgress(percentage, bytesRead, totalBytes);
-            }
-
-            @Override
-            public void onSuccess(File downloadedFile) {
-                VynaraLogger.system("GitHubWorkflowBridge: GLB downloaded and extracted successfully: " + downloadedFile.getAbsolutePath());
-                callback.onSuccess(downloadedFile);
-            }
-
-            @Override
-            public void onError(String errorMessage) {
-                if (attempt < maxAttempts) {
-                    VynaraLogger.system("GitHubWorkflowBridge: Waiting for run artifact indexing (attempt " + attempt + "/" + maxAttempts + ")...");
-                    mainHandler.post(() -> callback.onStatusUpdate("indexing", "Waiting for artifact indexing (" + attempt + "/" + maxAttempts + ")..."));
-                    mainHandler.postDelayed(() -> pollAndDownloadArtifact(repository, personalAccessToken, runId, assetId, destinationFile, callback, attempt + 1, maxAttempts), ARTIFACT_RETRY_DELAY_MS);
+        if (btnAnimPlay != null) {
+            btnAnimPlay.setOnClickListener(v -> {
+                isPlaying = !isPlaying;
+                btnAnimPlay.setImageResource(isPlaying ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play);
+                
+                for (Character c : runtime.getCharacterManager().getCharacterMap().values()) {
+                    if (c.getAnimationPlayer() != null) {
+                        if (isPlaying) {
+                            c.getAnimationPlayer().resume();
+                        } else {
+                            c.getAnimationPlayer().pause();
+                        }
+                    }
+                }
+                
+                if (isPlaying) {
+                    animHandler.post(animRunnable);
                 } else {
-                    VynaraLogger.e("GitHubWorkflowBridge: Artifact download failed: " + errorMessage);
-                    callback.onError(errorMessage);
+                    animHandler.removeCallbacks(animRunnable);
                 }
+            });
+        }
+
+        if (seekbarTimeline != null) {
+            seekbarTimeline.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override
+                public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    float seconds = (progress / 100.0f) * 5.0f;
+                    tvAnimTime.setText(String.format(java.util.Locale.US, "%.1fs / 5.0s", seconds));
+                    
+                    if (fromUser) {
+                        for (Character c : runtime.getCharacterManager().getCharacterMap().values()) {
+                            if (c.getAnimationPlayer() != null) {
+                                c.getAnimationPlayer().seek(seconds);
+                            }
+                        }
+                    }
+                }
+
+                @Override
+                public void onStartTrackingTouch(SeekBar seekBar) {}
+
+                @Override
+                public void onStopTrackingTouch(SeekBar seekBar) {}
+            });
+        }
+
+        // AI Assistant Dialog Launcher
+        View btnAi = view.findViewById(R.id.btn_ai_studio_assistant);
+        if (btnAi != null) {
+            btnAi.setOnClickListener(v -> {
+                AiAssistantDialogFragment dialog = new AiAssistantDialogFragment();
+                dialog.show(getChildFragmentManager(), "AiAssistantDialog");
+            });
+        }
+    }
+
+    /**
+     * Touch Event Handler: Translates touch gestures into spherical camera orbit rotation and pinch zoom.
+     */
+    private void setupViewportTouchOrbitGesture() {
+        if (glSurfaceView == null) return;
+
+        scaleGestureDetector = new ScaleGestureDetector(requireContext(), new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            @Override
+            public boolean onScale(ScaleGestureDetector detector) {
+                float scaleFactor = detector.getScaleFactor();
+                if (engine != null && engine.getCameraManager() != null) {
+                    Camera camera = engine.getCameraManager().getActiveCamera();
+                    if (camera != null) {
+                        camera.zoom(scaleFactor);
+                    }
+                }
+                return true;
+            }
+        });
+
+        glSurfaceView.setOnTouchListener(new View.OnTouchListener() {
+            private float previousTouchX;
+            private float previousTouchY;
+            private int activePointerId = MotionEvent.INVALID_POINTER_ID;
+
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                if (event == null) return false;
+
+                scaleGestureDetector.onTouchEvent(event);
+
+                int action = event.getActionMasked();
+
+                switch (action) {
+                    case MotionEvent.ACTION_DOWN: {
+                        int pointerIndex = event.getActionIndex();
+                        activePointerId = event.getPointerId(pointerIndex);
+                        previousTouchX = event.getX(pointerIndex);
+                        previousTouchY = event.getY(pointerIndex);
+                        v.performClick();
+                        return true;
+                    }
+
+                    case MotionEvent.ACTION_POINTER_DOWN: {
+                        int pointerIndex = event.getActionIndex();
+                        activePointerId = event.getPointerId(pointerIndex);
+                        previousTouchX = event.getX(pointerIndex);
+                        previousTouchY = event.getY(pointerIndex);
+                        return true;
+                    }
+
+                    case MotionEvent.ACTION_MOVE: {
+                        if (event.getPointerCount() == 1 && !scaleGestureDetector.isInProgress()) {
+                            int pointerIndex = event.findPointerIndex(activePointerId);
+                            if (pointerIndex == -1) {
+                                pointerIndex = 0;
+                                activePointerId = event.getPointerId(pointerIndex);
+                            }
+
+                            float x = event.getX(pointerIndex);
+                            float y = event.getY(pointerIndex);
+
+                            float deltaX = x - previousTouchX;
+                            float deltaY = y - previousTouchY;
+
+                            if (Math.abs(deltaX) < 100f && Math.abs(deltaY) < 100f) {
+                                if (engine != null && engine.getCameraManager() != null) {
+                                    Camera camera = engine.getCameraManager().getActiveCamera();
+                                    if (camera != null) {
+                                        camera.orbit(deltaX * 0.006f, deltaY * 0.006f);
+                                    }
+                                }
+                            }
+
+                            previousTouchX = x;
+                            previousTouchY = y;
+                        }
+                        return true;
+                    }
+
+                    case MotionEvent.ACTION_POINTER_UP: {
+                        int pointerIndex = event.getActionIndex();
+                        int pointerId = event.getPointerId(pointerIndex);
+                        if (pointerId == activePointerId) {
+                            int newPointerIndex = (pointerIndex == 0) ? 1 : 0;
+                            if (newPointerIndex < event.getPointerCount()) {
+                                activePointerId = event.getPointerId(newPointerIndex);
+                                previousTouchX = event.getX(newPointerIndex);
+                                previousTouchY = event.getY(newPointerIndex);
+                            }
+                        }
+                        return true;
+                    }
+
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL: {
+                        activePointerId = MotionEvent.INVALID_POINTER_ID;
+                        return true;
+                    }
+                }
+                return false;
             }
         });
     }
 
-    private void executeBinaryDownload(String downloadUrl,
-                                       String token,
-                                       File destinationFile,
-                                       ArtifactDownloadCallback callback) {
-        Request request = new Request.Builder()
-                .url(downloadUrl)
-                .header("Authorization", "Bearer " + token.trim())
-                .header("User-Agent", "Vynara-3D-Studio-Android")
-                .get()
-                .build();
-
-        httpClient.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onFailure(Call call, IOException e) {
-                mainHandler.post(() -> callback.onError("Failed to download artifact binary: " + e.getMessage()));
-            }
-
-            @Override
-            public void onResponse(Call call, Response response) throws IOException {
-                if (!response.isSuccessful() || response.body() == null) {
-                    mainHandler.post(() -> callback.onError("Artifact download failed: HTTP " + response.code()));
-                    return;
+    /**
+     * Spawns a procedural object into the active scene dynamically (used by AI Assistant).
+     */
+    public boolean spawnProceduralObject(String type, String name, float x, float y, float z, String colorHex) {
+        if (engine == null) return false;
+        try {
+            runtime.getTransactionManager().beginTransaction("Spawn " + name);
+            SceneObject obj = engine.createProceduralStructure(type, name);
+            if (obj != null) {
+                obj.getTransform().setPosition(x, y, z);
+                if (colorHex != null && !colorHex.isEmpty()) {
+                    Material mat = new Material("mat_" + System.currentTimeMillis(), name + "_Mat", colorHex);
+                    obj.setMaterial(mat);
                 }
-
-                ResponseBody body = response.body();
-                long totalBytes = body.contentLength();
-
-                File tempZipFile = new File(destinationFile.getParentFile(), destinationFile.getName() + ".zip");
-
-                try (InputStream inputStream = body.byteStream();
-                     FileOutputStream outputStream = new FileOutputStream(tempZipFile)) {
-
-                    byte[] buffer = new byte[8192];
-                    long totalBytesRead = 0;
-                    int bytesRead;
-
-                    while ((bytesRead = inputStream.read(buffer)) != -1) {
-                        outputStream.write(buffer, 0, bytesRead);
-                        totalBytesRead += bytesRead;
-
-                        if (totalBytes > 0) {
-                            int progress = (int) ((totalBytesRead * 100) / totalBytes);
-                            long currentRead = totalBytesRead;
-                            mainHandler.post(() -> callback.onProgress(progress, currentRead, totalBytes));
-                        }
-                    }
-                    outputStream.flush();
-
-                    boolean extracted = extractGlbFromZip(tempZipFile, destinationFile);
-                    if (tempZipFile.exists()) {
-                        tempZipFile.delete();
-                    }
-
-                    if (extracted && destinationFile.exists() && destinationFile.length() > 0) {
-                        mainHandler.post(() -> callback.onSuccess(destinationFile));
-                    } else {
-                        mainHandler.post(() -> callback.onError("Extracted file is missing or invalid."));
-                    }
-
-                } catch (Exception ex) {
-                    if (tempZipFile.exists()) {
-                        tempZipFile.delete();
-                    }
-                    mainHandler.post(() -> callback.onError("Error saving artifact: " + ex.getMessage()));
-                }
+                engine.getSceneManager().updateWorldTransforms();
+                runtime.getTransactionManager().commitTransaction();
+                updateStudioStatsUI();
+                return true;
             }
-        });
-    }
-
-    private boolean extractGlbFromZip(File zipFile, File destinationGlbFile) {
-        try (ZipInputStream zis = new ZipInputStream(new BufferedInputStream(new java.io.FileInputStream(zipFile)))) {
-            ZipEntry entry;
-            byte[] buffer = new byte[8192];
-
-            while ((entry = zis.getNextEntry()) != null) {
-                String fileName = entry.getName().toLowerCase();
-                if (fileName.endsWith(".glb") || fileName.endsWith(".gltf")) {
-                    if (destinationGlbFile.getParentFile() != null && !destinationGlbFile.getParentFile().exists()) {
-                        destinationGlbFile.getParentFile().mkdirs();
-                    }
-
-                    try (FileOutputStream fos = new FileOutputStream(destinationGlbFile)) {
-                        int len;
-                        while ((len = zis.read(buffer)) > 0) {
-                            fos.write(buffer, 0, len);
-                        }
-                        fos.flush();
-                    }
-                    zis.closeEntry();
-                    return true;
-                }
-                zis.closeEntry();
-            }
+            runtime.getTransactionManager().rollbackTransaction();
         } catch (Exception e) {
-            VynaraLogger.e("ZIP extraction error: " + e.getMessage(), e);
+            VynaraLogger.e("Failed to spawn procedural object: " + name, e);
         }
         return false;
+    }
+
+    public void clearScene() {
+        if (engine != null && engine.getSceneManager() != null) {
+            engine.getSceneManager().getActiveScene().getObjects().clear();
+            if (runtime != null && runtime.getCharacterManager() != null) {
+                runtime.getCharacterManager().getCharacterMap().clear();
+            }
+            updateStudioStatsUI();
+        }
+    }
+
+    public void loadAndDisplayGLBFile(File glbFile) {
+        if (glbFile == null || !glbFile.exists() || engine == null) return;
+
+        try {
+            VynaraLogger.system("StudioFragment: Loading external GLB into active scene: " + glbFile.getName());
+            GLTFImporter.ImportResult result = GLTFImporter.loadFromFile(glbFile);
+
+            runtime.getTransactionManager().beginTransaction("Import GLB Model");
+
+            for (SceneObject obj : result.getSceneObjects()) {
+                engine.getSceneManager().getActiveScene().addObject(obj);
+            }
+
+            for (Character ch : result.getCharacters()) {
+                runtime.getCharacterManager().registerCharacter(ch);
+            }
+
+            engine.getSceneManager().updateWorldTransforms();
+
+            // Auto-frame camera on newly imported model
+            if (!result.getSceneObjects().isEmpty() && engine.getCameraManager() != null) {
+                SceneObject first = result.getSceneObjects().get(0);
+                if (first.getTransform() != null) {
+                    Camera cam = engine.getCameraManager().getActiveCamera();
+                    if (cam != null) {
+                        cam.setTarget(first.getTransform().getPx(), first.getTransform().getPy() + 1.0f, first.getTransform().getPz());
+                    }
+                }
+            }
+
+            runtime.getTransactionManager().commitTransaction();
+
+            if (getActivity() != null) {
+                getActivity().runOnUiThread(() -> {
+                    updateStudioStatsUI();
+                    Toast.makeText(getContext(), "Imported: " + glbFile.getName(), Toast.LENGTH_SHORT).show();
+                });
+            }
+
+        } catch (Exception e) {
+            VynaraLogger.e("StudioFragment: Failed loading GLB file", e);
+            if (getActivity() != null) {
+                getActivity().runOnUiThread(() -> Toast.makeText(getContext(), "Import error: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        }
+    }
+
+    public void updateStudioStatsUI() {
+        if (tvStats != null && engine != null) {
+            Scene activeScene = engine.getSceneManager().getActiveScene();
+            int triangles = activeScene != null ? activeScene.getTotalTriangleCount() : 0;
+            int vertices = activeScene != null ? activeScene.getTotalVertexCount() : 0;
+            tvStats.setText("Tris: " + triangles + " | Verts: " + vertices);
+        }
+    }
+
+    private void exportActiveSceneToLocalGltf() {
+        if (getContext() == null || engine == null) return;
+
+        try {
+            Scene activeScene = engine.getSceneManager().getActiveScene();
+            String gltfJson = GLTFExporter.exportSceneToGLTFJson(activeScene);
+
+            File exportDir = new File(getContext().getExternalFilesDir(null), "exports");
+            if (!exportDir.exists() && !exportDir.mkdirs()) {
+                Toast.makeText(getContext(), "Failed to create export folder", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            File exportFile = new File(exportDir, "vynara_scene_" + System.currentTimeMillis() + ".gltf");
+            FileOutputStream fos = new FileOutputStream(exportFile);
+            fos.write(gltfJson.getBytes());
+            fos.close();
+
+            Toast.makeText(getContext(), "Scene exported to: " + exportFile.getName(), Toast.LENGTH_LONG).show();
+
+        } catch (Exception e) {
+            Toast.makeText(getContext(), "GLTF Export failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        if (glSurfaceView != null) glSurfaceView.onResume();
+        updateStudioStatsUI();
+    }
+
+    @Override
+    public void onPause() {
+        super.onPause();
+        if (glSurfaceView != null) glSurfaceView.onPause();
+        isPlaying = false;
+        animHandler.removeCallbacks(animRunnable);
     }
 }
