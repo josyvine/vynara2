@@ -1,5 +1,6 @@
 package com.example.engine;
 
+import android.graphics.Bitmap;
 import android.graphics.Color;
 
 public class Material {
@@ -16,6 +17,9 @@ public class Material {
     // OpenGL ES GPU Texture Handles
     private int textureId = 0;
     private int normalMapTextureId = 0;
+
+    // Staged In-Memory Bitmaps from GLTF decoding
+    private Bitmap textureBitmap = null;
 
     // Texture Map URI / Asset ID References
     private String albedoTextureMap;
@@ -52,7 +56,15 @@ public class Material {
 
     public int getTextureId() { return textureId; }
     public void setTextureId(int textureId) { this.textureId = textureId; }
-    public boolean hasTexture() { return textureId > 0 || (albedoTextureMap != null && !albedoTextureMap.isEmpty()); }
+
+    public Bitmap getTextureBitmap() { return textureBitmap; }
+    public void setTextureBitmap(Bitmap bmp) { this.textureBitmap = bmp; }
+    public boolean hasTextureBitmap() { return textureBitmap != null && !textureBitmap.isRecycled(); }
+    public void clearTextureBitmap() { this.textureBitmap = null; }
+
+    public boolean hasTexture() { 
+        return textureId > 0 || hasTextureBitmap() || (albedoTextureMap != null && !albedoTextureMap.isEmpty()); 
+    }
 
     public int getNormalMapTextureId() { return normalMapTextureId; }
     public void setNormalMapTextureId(int normalMapTextureId) { this.normalMapTextureId = normalMapTextureId; }
@@ -124,6 +136,7 @@ public class Material {
         copy.setAmbientOcclusion(this.ambientOcclusion);
         copy.setEmission(this.emissionRGB[0], this.emissionRGB[1], this.emissionRGB[2], this.emissionIntensity);
         copy.setTextureId(this.textureId);
+        copy.setTextureBitmap(this.textureBitmap);
         copy.setNormalMapTextureId(this.normalMapTextureId);
         copy.setAlbedoTextureMap(this.albedoTextureMap);
         copy.setNormalMap(this.normalMap);
