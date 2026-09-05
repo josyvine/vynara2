@@ -47,7 +47,6 @@ public class AIOrchestrator {
 
         if (!apiKeyManager.hasApiKey()) {
             VynaraLogger.system("API Key missing. Executing local offline prompt interpreter fallback.");
-            // Offline / missing API key fallback: Execute local prompt interpreter plan
             ProductionPlan localPlan = promptInterpreter.createProductionPlan(
                     request.getUserPrompt(), request.getStyle(), request.getTargetEngine(), request.getReferenceImageUris());
             callback.onSuccess(localPlan);
@@ -67,7 +66,7 @@ public class AIOrchestrator {
                     for (ToolParameter param : tool.getParameters()) {
                         toolManifestBuilder.append(param.getName()).append(" (").append(param.getType()).append("), ");
                     }
-                    toolManifestBuilder.setLength(toolManifestBuilder.length() - 2); // Trim trailing comma
+                    toolManifestBuilder.setLength(toolManifestBuilder.length() - 2);
                     toolManifestBuilder.append("\n");
                 }
             }
@@ -95,21 +94,16 @@ public class AIOrchestrator {
                 "- Tools are the ONLY executable operations. Tasks are concrete operations in the production plan.\n" +
                 "- You may reason using knowledge and capabilities, but you may execute ONLY registered tools.\n" +
                 "- When Target Engine is BLENDER_NATIVE or Cloud Workers (GitHub Actions) are used, select `blender.cloud_generate` as the primary production tool.\n" +
-                "- Rigging, skeletal bones, vertex weights, and animations for Blender Native MUST be generated directly inside Blender Python (`bpy`) using Armature objects (`bpy.data.armatures.new`), bone hierarchies, and automatic skin weighting (`bpy.ops.object.parent_set(type='ARMATURE_AUTO')`).\n" +
-                "- DO NOT select `rig.auto_rig_cloud` unless Hugging Face is explicitly selected as the compute provider. By default, never invoke external Hugging Face dependencies.\n" +
-                "- For local rendering engines (OpenGL ES / GLTF), use the local character generation and skeleton tools (`character.create_humanoid`, `character.create_creature`, `skeleton.build_humanoid`, `rig.create_ik_rig`). Ensure character mesh creation ALWAYS precedes rigging and animation tasks in the execution sequence.\n" +
-                "- CRITICAL PROCEDURAL FIDELITY & PYTHON SYNTAX RULES FOR `bpyScript` in `blender.cloud_generate`:\n" +
-                "  1. Output clean multiline Python 3 code using standard newlines (\\n).\n" +
-                "  2. NEVER write code on a single line or concatenate statements using semicolons (;). Inline semicolon statement chaining causes fatal SyntaxError crashes in Blender.\n" +
-                "  3. ALWAYS clear the default scene at the very beginning:\n" +
-                "     `bpy.ops.object.select_all(action='SELECT'); bpy.ops.object.delete()`\n" +
-                "  4. NEVER generate a single primitive cube, empty box, or placeholder geometry. Low-poly or placeholder boxes are strictly forbidden.\n" +
-                "  5. Build comprehensive, multi-object procedural Blender 4.x scenes with rich geometry and materials:\n" +
-                "     - Architecture / Modern Villa: Construct foundation slabs, primary walls with door/window openings, glass window panes (`Principled BSDF` with transmission=1.0 and low roughness), door frames, wooden pool deck planks, swimming pool basin with turquoise water material, interior illumination, and a sun light.\n" +
-                "     - Tropical Village: Construct multiple wooden huts with elevated stilts, sloped thatched roofs, sand terrain plane with displacement/subdivision, ocean water plane, curved palm tree trunks composed of multiple cylinders, and palm leaf foliage planes.\n" +
-                "     - Furniture / Luxury Leather Sofa: Construct the main base frame, distinct thick seating cushions, separate back cushions, rounded armrests, polished wooden/metallic feet, and rich PBR leather materials with appropriate roughness.\n" +
-                "     - Characters & Creatures: Construct anatomical body segments (head, chest, torso, arms, hands, legs, feet), create an Armature with corresponding bone chains, parent the mesh to the armature with `ARMATURE_AUTO` weights, and set up distinct costume/skin materials.\n" +
-                "  6. ALWAYS import `os`, create the output directory `import os; os.makedirs('output', exist_ok=True)`, and export the final 3D scene directly using:\n" +
+                "- DO NOT select `rig.auto_rig_cloud` unless Hugging Face is explicitly chosen in the provider settings.\n" +
+                "- CRITICAL PROCEDURAL FIDELITY & BLENDER 4.x SCRIPT RULES FOR `bpyScript` in `blender.cloud_generate`:\n" +
+                "  1. Output clean multiline Python 3 code using standard newlines (\\n). NEVER concatenate lines with semicolons (;).\n" +
+                "  2. Clear startup scene cleanly: `bpy.ops.object.select_all(action='SELECT'); bpy.ops.object.delete(use_global=False)`.\n" +
+                "  3. Enable Blender built-in addons: `import addon_utils; addon_utils.enable('archimesh'); addon_utils.enable('rigify')`.\n" +
+                "  4. NEVER output a single primitive cube or plain placeholder box. Construct multi-part detailed geometry with Bevel, Subdivision Surface, or Solidify modifiers.\n" +
+                "  5. For architectural prompts: build foundation slabs, detailed walls with openings, window frames with glass transmission, door panels, and ambient sun + warm interior point lights.\n" +
+                "  6. For furniture/vehicles: construct multi-part structures with distinct cushions, bevels, seams, and PBR material slots (leather, metallic, wood, chrome).\n" +
+                "  7. For characters/creatures: construct anatomical body segments, create an Armature hierarchy, and parent with `ARMATURE_AUTO`.\n" +
+                "  8. ALWAYS import `os`, create directory `os.makedirs('output', exist_ok=True)`, and export the final 3D scene directly using:\n" +
                 "     `bpy.ops.export_scene.gltf(filepath='output/model.glb', export_format='GLB')`\n" +
                 "- Choose your commands strictly from the provided Authoritative Registered Commands manifest. Never invent Tool IDs.\n\n" +
                 providerContext + "\n" +
@@ -128,7 +122,7 @@ public class AIOrchestrator {
                 "  \"requiredTools\": [ { \"toolId\": \"string\", \"description\": \"string\", \"parameters\": {} } ],\n" +
                 "  \"validationRules\": [ \"string\" ]\n" +
                 "}";
-        
+
         String promptWithContext = "USER PROMPT: " + request.getUserPrompt() +
                 "\nSTYLE: " + request.getStyle() +
                 "\nTARGET ENGINE: " + request.getTargetEngine() +
@@ -139,7 +133,6 @@ public class AIOrchestrator {
         VynaraLogger.gemini("Dispatched Prompt: " + request.getUserPrompt());
         VynaraLogger.ai("Active reasoning model: " + apiKeyManager.getSelectedModel());
 
-        // Enforce structured JSON API call
         apiClient.generateStructuredJson(apiKeyManager.getApiKey(), apiKeyManager.getSelectedModel(), systemInstruction, promptWithContext, new GeminiApiClient.ApiCallback<String>() {
             @Override
             public void onSuccess(String jsonResult) {
@@ -174,15 +167,16 @@ public class AIOrchestrator {
 
         String blenderSystemInstruction = "You are Vynara Master 3D Technical Director & Blender Python (`bpy`) Expert.\n" +
                 "REQUIREMENTS FOR BLENDER SCRIPT GENERATION:\n" +
-                "1. Clear default scene completely: `bpy.ops.object.select_all(action='SELECT'); bpy.ops.object.delete()`.\n" +
-                "2. NEVER output a single primitive cube or plain box placeholder.\n" +
-                "3. Construct detailed, multi-component, photorealistic 3D models using `bpy.ops.mesh` and `bpy.data` objects.\n" +
-                "4. For architectural prompts (villa, house, pool, tropical village): build foundation slabs, exterior walls, window panes with glass transmission, roof structures, pool cutouts with blue water material, wooden decks, vegetation elements, and lighting.\n" +
-                "5. For furniture/vehicles: construct multi-element models with Bevel modifiers, smooth shading, distinct material slots (metallic, leather, wood, fabric).\n" +
-                "6. For character/creature prompts: construct anatomical geometry, generate bone armature, parent with automatic weights (`bpy.ops.object.parent_set(type='ARMATURE_AUTO')`), and assign PBR materials.\n" +
-                "7. CRITICAL MANDATORY STEP: Import `os`, create output directory `import os; os.makedirs('output', exist_ok=True)`, and export the final 3D scene directly to GLB format using:\n" +
+                "1. Clear default scene completely: `bpy.ops.object.select_all(action='SELECT'); bpy.ops.object.delete(use_global=False)`.\n" +
+                "2. Enable built-in addons: `import addon_utils; addon_utils.enable('archimesh'); addon_utils.enable('rigify')`.\n" +
+                "3. NEVER output a single primitive cube or plain box placeholder.\n" +
+                "4. Construct detailed, multi-component, photorealistic 3D models using `bpy.ops.mesh` and `bpy.data` objects.\n" +
+                "5. For architectural prompts: build foundation slabs, exterior walls, window panes with glass transmission, roof structures, pool cutouts with blue water material, wooden decks, and lighting.\n" +
+                "6. For furniture/vehicles: construct multi-element models with Bevel modifiers, smooth shading, distinct material slots (metallic, leather, wood, fabric).\n" +
+                "7. For character/creature prompts: construct anatomical geometry, generate bone armature, parent with automatic weights (`bpy.ops.object.parent_set(type='ARMATURE_AUTO')`), and assign PBR materials.\n" +
+                "8. CRITICAL MANDATORY STEP: Import `os`, create output directory `os.makedirs('output', exist_ok=True)`, and export the final 3D scene directly to GLB format using:\n" +
                 "   `bpy.ops.export_scene.gltf(filepath='output/model.glb', export_format='GLB')`\n" +
-                "8. CRITICAL PYTHON FORMATTING RULE: Output clean multiline Python code with standard newlines (\\n). NEVER concatenate Python statements on a single line using semicolons (;). Return ONLY valid executable Python code without Markdown formatting backticks.";
+                "9. CRITICAL PYTHON FORMATTING RULE: Output clean multiline Python code with standard newlines (\\n). NEVER concatenate Python statements on a single line using semicolons (;). Return ONLY valid executable Python code without Markdown formatting backticks.";
 
         VynaraLogger.system("Generating Blender Python execution script via Gemini...");
         apiClient.generateBlenderScript(apiKeyManager.getApiKey(), apiKeyManager.getSelectedModel(), prompt + "\n" + blenderSystemInstruction, new GeminiApiClient.ApiCallback<String>() {
@@ -202,7 +196,7 @@ public class AIOrchestrator {
 
     /**
      * CORE UPGRADE: Processes natural language 3D scene editing.
-     * Translates human intent into specific tool parameters applied to existing scene nodes.
+     * Translates human intent into specific tool parameters applied to existing scene nodes OR creates new objects.
      */
     public void processNaturalLanguageStudioEdit(String editPrompt, String activeSceneContextJson, final GeminiApiClient.ApiCallback<String> callback) {
         if (!apiKeyManager.hasApiKey()) {
@@ -210,18 +204,25 @@ public class AIOrchestrator {
             return;
         }
 
-        String sysInst = "You are Vynara Studio Assistant. Interpret direct 3D edit requests on the active scene objects or environment. " +
-                "Return a strict JSON response containing the target object ID and the precise transform or material updates required.\n" +
+        String sysInst = "You are Vynara Studio Assistant. Interpret direct 3D requests on the active scene.\n" +
+                "You can either EDIT an existing object OR CREATE a new object.\n" +
+                "If the user asks to add/create something (e.g. 'add a green tree', 'add a chair', 'add light'):\n" +
+                "Set \"action\": \"CREATE\", specify \"creationType\" (e.g. 'tree', 'chair', 'house', 'primitive_cube', 'primitive_sphere'), \"name\": \"string\", \"position\": { \"px\": 0.0, \"py\": 0.0, \"pz\": 0.0 }, and \"material\": { \"colorHex\": \"#FFFFFF\", \"metallic\": 0.0, \"roughness\": 0.5 }.\n" +
+                "If the user asks to modify an existing object (e.g. 'make it wider', 'change color to blue', 'rotate 90 degrees'):\n" +
+                "Set \"action\": \"EDIT\", \"targetObjectId\": \"string (match from context)\", \"transform\": { \"px\": 0.0, \"py\": 0.0, \"pz\": 0.0, \"rx\": 0.0, \"ry\": 0.0, \"rz\": 0.0, \"sx\": 1.0, \"sy\": 1.0, \"sz\": 1.0 }, \"material\": { \"colorHex\": \"#FFFFFF\", \"metallic\": 0.0, \"roughness\": 0.5 }.\n" +
                 "JSON FORMAT:\n" +
                 "{\n" +
-                "  \"targetObjectId\": \"string (match from context)\",\n" +
+                "  \"action\": \"CREATE\" or \"EDIT\",\n" +
+                "  \"targetObjectId\": \"string\",\n" +
+                "  \"creationType\": \"string\",\n" +
+                "  \"name\": \"string\",\n" +
                 "  \"transform\": { \"px\": 0.0, \"py\": 0.0, \"pz\": 0.0, \"rx\": 0.0, \"ry\": 0.0, \"rz\": 0.0, \"sx\": 1.0, \"sy\": 1.0, \"sz\": 1.0 },\n" +
                 "  \"material\": { \"colorHex\": \"#FFFFFF\", \"metallic\": 0.0, \"roughness\": 0.5, \"opacity\": 1.0 }\n" +
                 "}";
-        
-        String fullPrompt = "SCENE CONTEXT:\n" + activeSceneContextJson + "\n\nEDIT PROMPT: " + editPrompt;
 
-        VynaraLogger.system("Asynchronously dispatching Studio Assistant edit request to Google Gemini API...");
+        String fullPrompt = "SCENE CONTEXT:\n" + activeSceneContextJson + "\n\nUSER REQUEST: " + editPrompt;
+
+        VynaraLogger.system("Asynchronously dispatching Studio Assistant request to Google Gemini API...");
         VynaraLogger.gemini("Dispatched Studio Edit Prompt: " + editPrompt);
 
         apiClient.generateStructuredJson(apiKeyManager.getApiKey(), apiKeyManager.getSelectedModel(), sysInst, fullPrompt, new GeminiApiClient.ApiCallback<String>() {
