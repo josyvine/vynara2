@@ -33,10 +33,10 @@ import okhttp3.ResponseBody;
 public class GitHubWorkflowBridge {
     private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
     private static final int DEFAULT_TIMEOUT_SECONDS = 60;
-    private static final long POLLING_INTERVAL_MS = 5000; // 5 seconds interval
+    private static final long POLLING_INTERVAL_MS = 4000; // 4 seconds interval
     private static final long MAX_POLLING_DURATION_MS = 300000; // 5 minutes timeout
-    private static final int MAX_ARTIFACT_RETRY_ATTEMPTS = 16; // 16 retries (48s window for GitHub artifact indexing)
-    private static final long ARTIFACT_RETRY_DELAY_MS = 3000; // 3 seconds between artifact retries
+    private static final int MAX_ARTIFACT_RETRY_ATTEMPTS = 8; // 8 retries (20s window for run-specific artifact indexing)
+    private static final long ARTIFACT_RETRY_DELAY_MS = 2500; // 2.5 seconds between artifact retries
 
     private final OkHttpClient httpClient;
     private final Handler mainHandler;
@@ -264,7 +264,7 @@ public class GitHubWorkflowBridge {
                     for (int i = 0; i < artifacts.length(); i++) {
                         JSONObject artifact = artifacts.getJSONObject(i);
                         String name = artifact.optString("name", "");
-                        if (name.equalsIgnoreCase(assetId) || name.contains(assetId)) {
+                        if (name.equalsIgnoreCase(assetId) || name.contains(assetId) || name.equalsIgnoreCase("model")) {
                             downloadLocationUrl = artifact.optString("archive_download_url", null);
                             break;
                         }
@@ -278,6 +278,68 @@ public class GitHubWorkflowBridge {
                     executeBinaryDownload(downloadLocationUrl, personalAccessToken, destinationFile, callback);
                 } catch (Exception ex) {
                     mainHandler.post(() -> callback.onError("Failed to parse artifacts list: " + ex.getMessage()));
+                }
+            }
+        });
+    }
+
+    public void downloadWorkflowArtifactForRun(String repository,
+                                               String personalAccessToken,
+                                               long runId,
+                                               String assetId,
+                                               File destinationFile,
+                                               ArtifactDownloadCallback callback) {
+        String runArtifactsUrl = "https://api.github.com/repos/" + repository.trim() + "/actions/runs/" + runId + "/artifacts";
+
+        Request request = new Request.Builder()
+                .url(runArtifactsUrl)
+                .header("Authorization", "Bearer " + personalAccessToken.trim())
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "Vynara-3D-Studio-Android")
+                .get()
+                .build();
+
+        httpClient.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                mainHandler.post(() -> callback.onError("Run artifact search failed: " + e.getMessage()));
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                try (ResponseBody responseBody = response.body()) {
+                    if (!response.isSuccessful() || responseBody == null) {
+                        mainHandler.post(() -> callback.onError("Failed to list run artifacts: HTTP " + response.code()));
+                        return;
+                    }
+
+                    String json = responseBody.string();
+                    JSONObject root = new JSONObject(json);
+                    JSONArray artifacts = root.optJSONArray("artifacts");
+
+                    if (artifacts == null || artifacts.length() == 0) {
+                        mainHandler.post(() -> callback.onError("No artifacts produced for Run #" + runId));
+                        return;
+                    }
+
+                    String downloadLocationUrl = null;
+                    for (int i = 0; i < artifacts.length(); i++) {
+                        JSONObject artifact = artifacts.getJSONObject(i);
+                        String name = artifact.optString("name", "");
+                        if (name.equalsIgnoreCase(assetId) || name.contains(assetId) || name.equalsIgnoreCase("model") || artifacts.length() == 1) {
+                            downloadLocationUrl = artifact.optString("archive_download_url", null);
+                            break;
+                        }
+                    }
+
+                    if (downloadLocationUrl == null) {
+                        mainHandler.post(() -> callback.onError("Target GLB artifact not ready for Run #" + runId));
+                        return;
+                    }
+
+                    executeBinaryDownload(downloadLocationUrl, personalAccessToken, destinationFile, callback);
+                } catch (Exception ex) {
+                    mainHandler.post(() -> callback.onError("Failed to parse run artifacts: " + ex.getMessage()));
                 }
             }
         });
@@ -339,7 +401,6 @@ public class GitHubWorkflowBridge {
                             if (runs != null && runs.length() > 0) {
                                 JSONObject targetRun = null;
 
-                                // Filter runs to strictly find the one triggered for THIS dispatch
                                 SimpleDateFormat isoFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US);
                                 isoFormat.setTimeZone(TimeZone.getTimeZone("UTC"));
 
@@ -353,7 +414,6 @@ public class GitHubWorkflowBridge {
                                         }
                                     } catch (Exception ignored) {}
 
-                                    // Accept runs created around or after dispatch time (with 15s clock tolerance)
                                     if (runCreatedAtMs >= (dispatchTimeMs - 15000)) {
                                         targetRun = r;
                                         break;
@@ -370,11 +430,10 @@ public class GitHubWorkflowBridge {
 
                                     if ("completed".equalsIgnoreCase(status)) {
                                         if ("success".equalsIgnoreCase(conclusion)) {
-                                            VynaraLogger.system("GitHubWorkflowBridge: Workflow run #" + runId + " succeeded! Waiting for artifact indexing...");
+                                            VynaraLogger.system("GitHubWorkflowBridge: Workflow run #" + runId + " succeeded! Downloading run-specific artifact...");
                                             mainHandler.post(() -> callback.onStatusUpdate("downloading", "Downloading GLB artifact..."));
 
-                                            // Start retry polling loop to allow GitHub API artifact indexing to complete
-                                            pollAndDownloadArtifact(repository, personalAccessToken, assetId, destinationFile, callback, 1, MAX_ARTIFACT_RETRY_ATTEMPTS);
+                                            pollAndDownloadArtifact(repository, personalAccessToken, runId, assetId, destinationFile, callback, 1, MAX_ARTIFACT_RETRY_ATTEMPTS);
                                             return;
                                         } else {
                                             String failureMsg = "GitHub Workflow Run #" + runId + " failed with conclusion: " + conclusion;
@@ -389,7 +448,6 @@ public class GitHubWorkflowBridge {
                                 }
                             }
 
-                            // Still queued or in progress, schedule next poll
                             mainHandler.postDelayed(pollRunnable[0], POLLING_INTERVAL_MS);
 
                         } catch (Exception ex) {
@@ -406,12 +464,13 @@ public class GitHubWorkflowBridge {
 
     private void pollAndDownloadArtifact(String repository,
                                          String personalAccessToken,
+                                         long runId,
                                          String assetId,
                                          File destinationFile,
                                          WorkflowPollingCallback callback,
                                          int attempt,
                                          int maxAttempts) {
-        downloadWorkflowArtifact(repository, personalAccessToken, assetId, destinationFile, new ArtifactDownloadCallback() {
+        downloadWorkflowArtifactForRun(repository, personalAccessToken, runId, assetId, destinationFile, new ArtifactDownloadCallback() {
             @Override
             public void onProgress(int percentage, long bytesRead, long totalBytes) {
                 callback.onProgress(percentage, bytesRead, totalBytes);
@@ -425,10 +484,10 @@ public class GitHubWorkflowBridge {
 
             @Override
             public void onError(String errorMessage) {
-                if (attempt < maxAttempts && (errorMessage.contains("not ready yet") || errorMessage.contains("No build artifacts found"))) {
-                    VynaraLogger.system("GitHubWorkflowBridge: Waiting for GitHub artifact indexing (attempt " + attempt + "/" + maxAttempts + ")...");
+                if (attempt < maxAttempts) {
+                    VynaraLogger.system("GitHubWorkflowBridge: Waiting for run artifact indexing (attempt " + attempt + "/" + maxAttempts + ")...");
                     mainHandler.post(() -> callback.onStatusUpdate("indexing", "Waiting for artifact indexing (" + attempt + "/" + maxAttempts + ")..."));
-                    mainHandler.postDelayed(() -> pollAndDownloadArtifact(repository, personalAccessToken, assetId, destinationFile, callback, attempt + 1, maxAttempts), ARTIFACT_RETRY_DELAY_MS);
+                    mainHandler.postDelayed(() -> pollAndDownloadArtifact(repository, personalAccessToken, runId, assetId, destinationFile, callback, attempt + 1, maxAttempts), ARTIFACT_RETRY_DELAY_MS);
                 } else {
                     VynaraLogger.e("GitHubWorkflowBridge: Artifact download failed: " + errorMessage);
                     callback.onError(errorMessage);
