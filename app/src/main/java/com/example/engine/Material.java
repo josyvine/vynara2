@@ -13,6 +13,10 @@ public class Material {
     private float opacity = 1.0f;
     private float ambientOcclusion = 1.0f;
 
+    // OpenGL ES GPU Texture Handles
+    private int textureId = 0;
+    private int normalMapTextureId = 0;
+
     // Texture Map URI / Asset ID References
     private String albedoTextureMap;
     private String normalMap;
@@ -45,6 +49,14 @@ public class Material {
     public float getRoughness() { return roughness; }
     public float getOpacity() { return opacity; }
     public float getAmbientOcclusion() { return ambientOcclusion; }
+
+    public int getTextureId() { return textureId; }
+    public void setTextureId(int textureId) { this.textureId = textureId; }
+    public boolean hasTexture() { return textureId > 0 || (albedoTextureMap != null && !albedoTextureMap.isEmpty()); }
+
+    public int getNormalMapTextureId() { return normalMapTextureId; }
+    public void setNormalMapTextureId(int normalMapTextureId) { this.normalMapTextureId = normalMapTextureId; }
+    public boolean hasNormalMap() { return normalMapTextureId > 0 || (normalMap != null && !normalMap.isEmpty()); }
 
     public String getAlbedoTextureMap() { return albedoTextureMap; }
     public String getNormalMap() { return normalMap; }
@@ -86,7 +98,6 @@ public class Material {
 
     public void setColorHex(String hexColor) {
         if (hexColor == null || hexColor.trim().isEmpty()) {
-            // Standard fallback light-gray PBR
             this.baseColorRGBA = new float[] { 0.8f, 0.8f, 0.8f, this.opacity };
             return;
         }
@@ -101,7 +112,6 @@ public class Material {
             baseColorRGBA[2] = Color.blue(c) / 255f;
             baseColorRGBA[3] = (Color.alpha(c) / 255f) * opacity;
         } catch (Exception e) {
-            // Standard fallback on parsing errors
             this.baseColorRGBA = new float[] { 0.8f, 0.8f, 0.8f, this.opacity };
         }
     }
@@ -113,6 +123,8 @@ public class Material {
         copy.setOpacity(this.opacity);
         copy.setAmbientOcclusion(this.ambientOcclusion);
         copy.setEmission(this.emissionRGB[0], this.emissionRGB[1], this.emissionRGB[2], this.emissionIntensity);
+        copy.setTextureId(this.textureId);
+        copy.setNormalMapTextureId(this.normalMapTextureId);
         copy.setAlbedoTextureMap(this.albedoTextureMap);
         copy.setNormalMap(this.normalMap);
         copy.setRoughnessMap(this.roughnessMap);
