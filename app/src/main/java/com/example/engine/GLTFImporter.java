@@ -1,5 +1,8 @@
 package com.example.engine;
 
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+
 import com.example.character.Bone;
 import com.example.character.Character;
 import com.example.character.CharacterSpecification;
@@ -118,13 +121,45 @@ public class GLTFImporter {
         JSONArray materialsJson = json.optJSONArray("materials");
         JSONArray nodesJson = json.optJSONArray("nodes");
         JSONArray skinsJson = json.optJSONArray("skins");
+        JSONArray imagesJson = json.optJSONArray("images");
+        JSONArray texturesJson = json.optJSONArray("textures");
 
+        // 1. Decode Embedded Image Buffers into Bitmaps
+        List<Bitmap> decodedBitmaps = new ArrayList<>();
+        if (imagesJson != null && bufferViewsJson != null) {
+            for (int i = 0; i < imagesJson.length(); i++) {
+                JSONObject imgObj = imagesJson.getJSONObject(i);
+                Bitmap bitmap = null;
+
+                if (imgObj.has("bufferView")) {
+                    int bvIdx = imgObj.getInt("bufferView");
+                    if (bvIdx < bufferViewsJson.length()) {
+                        JSONObject bv = bufferViewsJson.getJSONObject(bvIdx);
+                        int byteOffset = bv.optInt("byteOffset", 0);
+                        int byteLength = bv.getInt("byteLength");
+
+                        if (byteOffset + byteLength <= binaryBuffer.length) {
+                            try {
+                                bitmap = BitmapFactory.decodeByteArray(binaryBuffer, byteOffset, byteLength);
+                            } catch (Exception e) {
+                                VynaraLogger.e("GLTFImporter: Failed decoding embedded texture #" + i, e);
+                            }
+                        }
+                    }
+                }
+                decodedBitmaps.add(bitmap);
+            }
+        }
+
+        // 2. Parse Materials & Link Diffuse/Albedo Textures
         List<Material> parsedMaterials = new ArrayList<>();
         if (materialsJson != null) {
             for (int i = 0; i < materialsJson.length(); i++) {
                 JSONObject matObj = materialsJson.getJSONObject(i);
-                float r = 0.8f, g = 0.8f, b = 0.8f;
+                String matName = matObj.optString("name", "Mat_" + i);
+                float r = 0.8f, g = 0.8f, b = 0.8f, a = 1.0f;
                 float metallic = 0.1f, roughness = 0.5f;
+                Bitmap baseTextureBitmap = null;
 
                 JSONObject pbr = matObj.optJSONObject("pbrMetallicRoughness");
                 if (pbr != null) {
@@ -133,19 +168,40 @@ public class GLTFImporter {
                         r = (float) baseColorArr.getDouble(0);
                         g = (float) baseColorArr.getDouble(1);
                         b = (float) baseColorArr.getDouble(2);
+                        if (baseColorArr.length() >= 4) {
+                            a = (float) baseColorArr.getDouble(3);
+                        }
                     }
-                    metallic = (float) pbr.optDouble("metallicFactor", 0.0);
+                    metallic = (float) pbr.optDouble("metallicFactor", 0.1);
                     roughness = (float) pbr.optDouble("roughnessFactor", 0.5);
+
+                    JSONObject baseTexObj = pbr.optJSONObject("baseColorTexture");
+                    if (baseTexObj != null && texturesJson != null) {
+                        int texIdx = baseTexObj.optInt("index", -1);
+                        if (texIdx >= 0 && texIdx < texturesJson.length()) {
+                            JSONObject texObj = texturesJson.getJSONObject(texIdx);
+                            int sourceImgIdx = texObj.optInt("source", -1);
+                            if (sourceImgIdx >= 0 && sourceImgIdx < decodedBitmaps.size()) {
+                                baseTextureBitmap = decodedBitmaps.get(sourceImgIdx);
+                            }
+                        }
+                    }
                 }
 
-                Material material = new Material("mat_" + i, "Mat_" + i, r, g, b, 1.0f);
+                Material material = new Material("mat_" + i, matName, r, g, b, a);
                 material.setMetallic(metallic);
                 material.setRoughness(roughness);
+                if (baseTextureBitmap != null) {
+                    material.setTextureBitmap(baseTextureBitmap);
+                }
                 parsedMaterials.add(material);
             }
         }
 
+        // 3. Parse Mesh Primitives & Material Indices
         List<Mesh> parsedMeshes = new ArrayList<>();
+        List<Integer> meshMaterialIndices = new ArrayList<>();
+
         if (meshesJson != null) {
             for (int m = 0; m < meshesJson.length(); m++) {
                 JSONObject meshObj = meshesJson.getJSONObject(m);
@@ -201,10 +257,14 @@ public class GLTFImporter {
 
                     Mesh mesh = new Mesh(positions, normals, uvs, indices);
                     parsedMeshes.add(mesh);
+
+                    int matIdx = prim.optInt("material", -1);
+                    meshMaterialIndices.add(matIdx);
                 }
             }
         }
 
+        // 4. Parse Bone Skeletons
         Map<Integer, Bone> boneNodeMap = new HashMap<>();
         List<Skeleton> parsedSkeletons = new ArrayList<>();
 
@@ -250,6 +310,7 @@ public class GLTFImporter {
             }
         }
 
+        // 5. Assemble Scene Nodes with Matching Specific Materials
         if (nodesJson != null) {
             for (int n = 0; n < nodesJson.length(); n++) {
                 JSONObject nodeObj = nodesJson.getJSONObject(n);
@@ -259,7 +320,17 @@ public class GLTFImporter {
                     int meshIdx = nodeObj.getInt("mesh");
                     if (meshIdx < parsedMeshes.size()) {
                         Mesh mesh = parsedMeshes.get(meshIdx);
-                        Material mat = parsedMaterials.isEmpty() ? new Material("mat_def", "Default", 0.8f, 0.8f, 0.8f, 1.0f) : parsedMaterials.get(0);
+                        int assignedMatIdx = (meshIdx < meshMaterialIndices.size()) ? meshMaterialIndices.get(meshIdx) : -1;
+
+                        Material mat;
+                        if (assignedMatIdx >= 0 && assignedMatIdx < parsedMaterials.size()) {
+                            mat = parsedMaterials.get(assignedMatIdx);
+                        } else if (!parsedMaterials.isEmpty()) {
+                            mat = parsedMaterials.get(0);
+                        } else {
+                            mat = new Material("mat_def_" + n, "Default", 0.8f, 0.8f, 0.8f, 1.0f);
+                        }
+
                         SceneObject sceneObject = new SceneObject("obj_" + n, nodeName, "MESH", mesh, mat);
                         applyNodeTransformToObject(nodeObj, sceneObject);
 
@@ -277,7 +348,11 @@ public class GLTFImporter {
 
         if (sceneObjects.isEmpty() && characters.isEmpty() && !parsedMeshes.isEmpty()) {
             for (int i = 0; i < parsedMeshes.size(); i++) {
-                Material mat = parsedMaterials.isEmpty() ? new Material("mat_def", "Default", 0.8f, 0.8f, 0.8f, 1.0f) : parsedMaterials.get(0);
+                int assignedMatIdx = (i < meshMaterialIndices.size()) ? meshMaterialIndices.get(i) : -1;
+                Material mat = (assignedMatIdx >= 0 && assignedMatIdx < parsedMaterials.size()) 
+                        ? parsedMaterials.get(assignedMatIdx) 
+                        : (parsedMaterials.isEmpty() ? new Material("mat_def", "Default", 0.8f, 0.8f, 0.8f, 1.0f) : parsedMaterials.get(0));
+
                 SceneObject obj = new SceneObject("imported_obj_" + i, "Imported Mesh " + i, "MESH", parsedMeshes.get(i), mat);
                 sceneObjects.add(obj);
             }
