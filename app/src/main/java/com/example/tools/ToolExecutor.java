@@ -417,7 +417,7 @@ public class ToolExecutor {
                 }
 
                 try {
-                    latch.await(300, TimeUnit.SECONDS); // Block for up to 5 minutes to allow Blender GitHub worker to finish
+                    latch.await(300, TimeUnit.SECONDS);
                 } catch (InterruptedException ignored) {}
 
                 return success.get();
@@ -441,7 +441,6 @@ public class ToolExecutor {
                 VynaraLogger.system("Executing rig.auto_rig_cloud for object: " + target.getId());
                 ApiKeyManager keyManager = ProjectRuntime.getInstance().getAIOrchestrator().getApiKeyManager();
 
-                // If Hugging Face Space is not configured, fall back to native procedural rig immediately without failing
                 if (!keyManager.hasHuggingFaceConfig() || keyManager.getHuggingFaceSpaceUrl().trim().isEmpty()) {
                     VynaraLogger.system("Hugging Face Space URL is not configured. Falling back to native procedural rigging engine.");
                     return applyLocalRigFallback(target, rigType);
@@ -584,8 +583,11 @@ public class ToolExecutor {
             }
 
             case "scene.clear": {
-                VynaraLogger.execution("Executing scene.clear: Resetting scene objects...");
+                VynaraLogger.execution("Executing scene.clear: Resetting scene objects and character containers...");
                 engine.getSceneManager().getActiveScene().getObjects().clear();
+                engine.getSceneManager().selectObject(null);
+                characterManager.getCharacterMap().clear();
+                engine.getSceneManager().updateWorldTransforms();
                 return true;
             }
 
