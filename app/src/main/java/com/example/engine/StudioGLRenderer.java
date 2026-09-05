@@ -2,6 +2,7 @@ package com.example.engine;
 
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
+import android.opengl.GLUtils;
 import android.opengl.Matrix;
 
 import java.nio.ByteBuffer;
@@ -256,7 +257,7 @@ public class StudioGLRenderer implements GLSurfaceView.Renderer {
         // 1. Render Ground Grid (Opaque pass, no textures)
         drawGrid(viewMatrix, projMatrix);
 
-        // 2. Render Active 3D Scene Graph Nodes (Sorting translucent nodes for correct blending)
+        // 2. Render Active 3D Scene Graph Nodes
         Scene scene = sceneManager.getActiveScene();
         if (scene != null) {
             List<SceneObject> flatList = scene.getFlatObjectList();
@@ -293,7 +294,7 @@ public class StudioGLRenderer implements GLSurfaceView.Renderer {
             for (RenderTask task : translucentTasks) {
                 drawTask(task, viewMatrix, projMatrix);
             }
-            GLES20.glDepthMask(true); // Re-enable depth write
+            GLES20.glDepthMask(true);
         }
     }
 
@@ -349,6 +350,23 @@ public class StudioGLRenderer implements GLSurfaceView.Renderer {
             String matName = mat.getName() != null ? mat.getName().toLowerCase() : "";
             if (matId.contains("water") || matId.contains("ocean") || matName.contains("water") || matName.contains("ocean")) {
                 isWater = 1.0f;
+            }
+
+            // GPU Texture Staging: If a bitmap was decoded on a background thread, upload it now on the GL thread
+            if (mat.hasTextureBitmap() && mat.getTextureId() == 0) {
+                int[] texIds = new int[1];
+                GLES20.glGenTextures(1, texIds, 0);
+                if (texIds[0] > 0) {
+                    GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texIds[0]);
+                    GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
+                    GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
+                    GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_REPEAT);
+                    GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_REPEAT);
+                    GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, mat.getTextureBitmap(), 0);
+                    GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
+                    mat.setTextureId(texIds[0]);
+                    mat.clearTextureBitmap(); // Free RAM memory now that it's in GPU VRAM
+                }
             }
 
             // Bind Texture Map if present on material
