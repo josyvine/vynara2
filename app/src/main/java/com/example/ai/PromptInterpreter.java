@@ -51,15 +51,23 @@ public class PromptInterpreter {
         List<String> geometryTaskIds = new ArrayList<>();
         List<String> leafTaskIds = new ArrayList<>();
 
-        // Step 0: Reference Image Analysis Task if images are attached
+        // Step 0A: Auto-Clear Canvas Task (Ensures previous scenes don't stack up)
+        String clearTaskId = "task_" + taskCounter++;
+        TaskNode clearNode = new TaskNode(clearTaskId, "Clearing Canvas", "Resetting viewport scene nodes",
+                new ToolOperation("scene.clear"));
+        graph.addTask(clearNode);
+
+        // Step 0B: Reference Image Analysis Task if images are attached
         String referenceTaskId = null;
         if (plan.hasReferenceImages()) {
             referenceTaskId = "task_" + taskCounter++;
             TaskNode t0 = new TaskNode(referenceTaskId, "Processing Reference Images", "Analyzing " + plan.getReferenceImageUris().size() + " visual reference image(s)", null);
+            t0.addDependency(clearTaskId);
             t0.setStatus(TaskNode.Status.COMPLETED);
             graph.addTask(t0);
         }
 
+        String initialDependency = (referenceTaskId != null) ? referenceTaskId : clearTaskId;
         boolean isBlenderNative = targetEngine != null && targetEngine.toLowerCase().contains("blender");
 
         if (isBlenderNative) {
@@ -72,7 +80,13 @@ public class PromptInterpreter {
             defaultBpyScript.append("import bpy\n");
             defaultBpyScript.append("import os\n");
             defaultBpyScript.append("import math\n");
-            defaultBpyScript.append("import random\n\n");
+            defaultBpyScript.append("import random\n");
+            defaultBpyScript.append("import addon_utils\n\n");
+            defaultBpyScript.append("try:\n");
+            defaultBpyScript.append("    addon_utils.enable('archimesh')\n");
+            defaultBpyScript.append("    addon_utils.enable('rigify')\n");
+            defaultBpyScript.append("except Exception as e:\n");
+            defaultBpyScript.append("    print(f'Addon activation note: {e}')\n\n");
             defaultBpyScript.append("os.makedirs('output', exist_ok=True)\n\n");
             defaultBpyScript.append("# Clear all initial default scene objects\n");
             defaultBpyScript.append("bpy.ops.object.select_all(action='SELECT')\n");
@@ -80,7 +94,6 @@ public class PromptInterpreter {
 
             if (lowerPrompt.contains("superhero") || lowerPrompt.contains("character") || lowerPrompt.contains("humanoid") || lowerPrompt.contains("biped")) {
                 defaultBpyScript.append("# --- High-Detail Procedural Rigged Superhero Character ---\n");
-                defaultBpyScript.append("# Materials\n");
                 defaultBpyScript.append("mat_suit = bpy.data.materials.new(name='Suit_Material')\n");
                 defaultBpyScript.append("mat_suit.use_nodes = True\n");
                 defaultBpyScript.append("bsdf_suit = mat_suit.node_tree.nodes.get('Principled BSDF')\n");
@@ -168,28 +181,36 @@ public class PromptInterpreter {
                 defaultBpyScript.append("hero_mesh = bpy.context.active_object\n");
                 defaultBpyScript.append("hero_mesh.name = 'Superhero_Mesh'\n\n");
 
-                defaultBpyScript.append("# Build Skeletal Armature Rig\n");
+                defaultBpyScript.append("# Build Skeletal Armature Rig with Context Safeguards\n");
                 defaultBpyScript.append("bpy.ops.object.armature_add(location=(0, 0, 1.8))\n");
                 defaultBpyScript.append("arm_obj = bpy.context.active_object\n");
                 defaultBpyScript.append("arm_obj.name = 'Superhero_Rig'\n");
-                defaultBpyScript.append("bpy.ops.object.mode_set(mode='EDIT')\n");
-                defaultBpyScript.append("ebones = arm_obj.data.edit_bones\n");
-                defaultBpyScript.append("root_bone = ebones[0]\n");
-                defaultBpyScript.append("root_bone.name = 'Pelvis'\n");
-                defaultBpyScript.append("root_bone.head = (0, 0, 1.8)\n");
-                defaultBpyScript.append("root_bone.tail = (0, 0, 2.3)\n\n");
-                defaultBpyScript.append("spine = ebones.new('Spine')\n");
-                defaultBpyScript.append("spine.head = (0, 0, 2.3)\n");
-                defaultBpyScript.append("spine.tail = (0, 0, 2.85)\n");
-                defaultBpyScript.append("spine.parent = root_bone\n\n");
-                defaultBpyScript.append("bpy.ops.object.mode_set(mode='OBJECT')\n\n");
+                defaultBpyScript.append("try:\n");
+                defaultBpyScript.append("    bpy.context.view_layer.objects.active = arm_obj\n");
+                defaultBpyScript.append("    bpy.ops.object.mode_set(mode='EDIT')\n");
+                defaultBpyScript.append("    ebones = arm_obj.data.edit_bones\n");
+                defaultBpyScript.append("    root_bone = ebones[0]\n");
+                defaultBpyScript.append("    root_bone.name = 'Pelvis'\n");
+                defaultBpyScript.append("    root_bone.head = (0, 0, 1.8)\n");
+                defaultBpyScript.append("    root_bone.tail = (0, 0, 2.3)\n");
+                defaultBpyScript.append("    spine = ebones.new('Spine')\n");
+                defaultBpyScript.append("    spine.head = (0, 0, 2.3)\n");
+                defaultBpyScript.append("    spine.tail = (0, 0, 2.85)\n");
+                defaultBpyScript.append("    spine.parent = root_bone\n");
+                defaultBpyScript.append("    bpy.ops.object.mode_set(mode='OBJECT')\n");
+                defaultBpyScript.append("except Exception as be:\n");
+                defaultBpyScript.append("    print(f'Armature setup note: {be}')\n\n");
 
-                defaultBpyScript.append("# Auto-Parent Rig with Automatic Weights\n");
-                defaultBpyScript.append("bpy.ops.object.select_all(action='DESELECT')\n");
-                defaultBpyScript.append("hero_mesh.select_set(True)\n");
-                defaultBpyScript.append("arm_obj.select_set(True)\n");
-                defaultBpyScript.append("bpy.context.view_layer.objects.active = arm_obj\n");
-                defaultBpyScript.append("bpy.ops.object.parent_set(type='ARMATURE_AUTO')\n\n");
+                defaultBpyScript.append("# Safe Auto-Parenting\n");
+                defaultBpyScript.append("try:\n");
+                defaultBpyScript.append("    bpy.ops.object.select_all(action='DESELECT')\n");
+                defaultBpyScript.append("    hero_mesh.select_set(True)\n");
+                defaultBpyScript.append("    arm_obj.select_set(True)\n");
+                defaultBpyScript.append("    bpy.context.view_layer.objects.active = arm_obj\n");
+                defaultBpyScript.append("    bpy.ops.object.parent_set(type='ARMATURE_AUTO')\n");
+                defaultBpyScript.append("except Exception as pe:\n");
+                defaultBpyScript.append("    print(f'Parenting note: {pe}')\n");
+                defaultBpyScript.append("    hero_mesh.parent = arm_obj\n\n");
 
             } else if (lowerPrompt.contains("dog") || lowerPrompt.contains("animal") || lowerPrompt.contains("quadruped") || lowerPrompt.contains("creature")) {
                 defaultBpyScript.append("# --- High-Detail Procedural Rigged Canine Quadruped ---\n");
@@ -255,24 +276,32 @@ public class PromptInterpreter {
                 defaultBpyScript.append("dog_mesh = bpy.context.active_object\n");
                 defaultBpyScript.append("dog_mesh.name = 'Canine_Mesh'\n\n");
 
-                defaultBpyScript.append("# Skeletal Armature Rig\n");
+                defaultBpyScript.append("# Skeletal Armature Rig with Context Safeguards\n");
                 defaultBpyScript.append("bpy.ops.object.armature_add(location=(0, 0, 1.0))\n");
                 defaultBpyScript.append("arm_obj = bpy.context.active_object\n");
                 defaultBpyScript.append("arm_obj.name = 'Canine_Rig'\n");
-                defaultBpyScript.append("bpy.ops.object.mode_set(mode='EDIT')\n");
-                defaultBpyScript.append("ebones = arm_obj.data.edit_bones\n");
-                defaultBpyScript.append("spine = ebones[0]\n");
-                defaultBpyScript.append("spine.name = 'Spine'\n");
-                defaultBpyScript.append("spine.head = (0, 0.5, 1.0)\n");
-                defaultBpyScript.append("spine.tail = (0, -0.5, 1.0)\n");
-                defaultBpyScript.append("bpy.ops.object.mode_set(mode='OBJECT')\n\n");
+                defaultBpyScript.append("try:\n");
+                defaultBpyScript.append("    bpy.context.view_layer.objects.active = arm_obj\n");
+                defaultBpyScript.append("    bpy.ops.object.mode_set(mode='EDIT')\n");
+                defaultBpyScript.append("    ebones = arm_obj.data.edit_bones\n");
+                defaultBpyScript.append("    spine = ebones[0]\n");
+                defaultBpyScript.append("    spine.name = 'Spine'\n");
+                defaultBpyScript.append("    spine.head = (0, 0.5, 1.0)\n");
+                defaultBpyScript.append("    spine.tail = (0, -0.5, 1.0)\n");
+                defaultBpyScript.append("    bpy.ops.object.mode_set(mode='OBJECT')\n");
+                defaultBpyScript.append("except Exception as ce:\n");
+                defaultBpyScript.append("    print(f'Canine armature note: {ce}')\n\n");
 
-                defaultBpyScript.append("# Auto-Parent Rig with Automatic Weights\n");
-                defaultBpyScript.append("bpy.ops.object.select_all(action='DESELECT')\n");
-                defaultBpyScript.append("dog_mesh.select_set(True)\n");
-                defaultBpyScript.append("arm_obj.select_set(True)\n");
-                defaultBpyScript.append("bpy.context.view_layer.objects.active = arm_obj\n");
-                defaultBpyScript.append("bpy.ops.object.parent_set(type='ARMATURE_AUTO')\n\n");
+                defaultBpyScript.append("# Safe Auto-Parenting\n");
+                defaultBpyScript.append("try:\n");
+                defaultBpyScript.append("    bpy.ops.object.select_all(action='DESELECT')\n");
+                defaultBpyScript.append("    dog_mesh.select_set(True)\n");
+                defaultBpyScript.append("    arm_obj.select_set(True)\n");
+                defaultBpyScript.append("    bpy.context.view_layer.objects.active = arm_obj\n");
+                defaultBpyScript.append("    bpy.ops.object.parent_set(type='ARMATURE_AUTO')\n");
+                defaultBpyScript.append("except Exception as dpe:\n");
+                defaultBpyScript.append("    print(f'Dog parenting note: {dpe}')\n");
+                defaultBpyScript.append("    dog_mesh.parent = arm_obj\n\n");
 
             } else if (lowerPrompt.contains("villa") || lowerPrompt.contains("house") || lowerPrompt.contains("pool")) {
                 defaultBpyScript.append("# --- Procedural Modern Architectural Villa & Pool ---\n");
@@ -441,24 +470,20 @@ public class PromptInterpreter {
                 defaultBpyScript.append("# Elevated Wooden Stilt Huts\n");
                 defaultBpyScript.append("hut_clusters = [(-6, 2), (5, 4), (0, 8)]\n");
                 defaultBpyScript.append("for idx, (hx, hy) in enumerate(hut_clusters):\n");
-                defaultBpyScript.append("    # Stilts\n");
                 defaultBpyScript.append("    for sx, sy in [(-1.5, -1.5), (1.5, -1.5), (-1.5, 1.5), (1.5, 1.5)]:\n");
                 defaultBpyScript.append("        bpy.ops.mesh.primitive_cylinder_add(radius=0.1, depth=1.4, location=(hx + sx, hy + sy, 0.7))\n");
                 defaultBpyScript.append("        stilt = bpy.context.active_object\n");
                 defaultBpyScript.append("        stilt.data.materials.append(mat_wood)\n");
-                defaultBpyScript.append("    # Hut Floor Platform\n");
                 defaultBpyScript.append("    bpy.ops.mesh.primitive_cube_add(size=1, location=(hx, hy, 1.4))\n");
                 defaultBpyScript.append("    h_deck = bpy.context.active_object\n");
                 defaultBpyScript.append("    h_deck.scale = (3.6, 3.6, 0.2)\n");
                 defaultBpyScript.append("    bpy.ops.object.transform_apply(scale=True)\n");
                 defaultBpyScript.append("    h_deck.data.materials.append(mat_wood)\n");
-                defaultBpyScript.append("    # Hut Walls\n");
                 defaultBpyScript.append("    bpy.ops.mesh.primitive_cube_add(size=1, location=(hx, hy, 2.5))\n");
                 defaultBpyScript.append("    h_wall = bpy.context.active_object\n");
                 defaultBpyScript.append("    h_wall.scale = (3.0, 3.0, 2.0)\n");
                 defaultBpyScript.append("    bpy.ops.object.transform_apply(scale=True)\n");
                 defaultBpyScript.append("    h_wall.data.materials.append(mat_wood)\n");
-                defaultBpyScript.append("    # Thatched Pyramidal Roof\n");
                 defaultBpyScript.append("    bpy.ops.mesh.primitive_cone_add(radius1=2.6, depth=1.8, location=(hx, hy, 4.2))\n");
                 defaultBpyScript.append("    roof = bpy.context.active_object\n");
                 defaultBpyScript.append("    roof.name = 'Thatched_Roof_' + str(idx)\n");
@@ -471,7 +496,6 @@ public class PromptInterpreter {
                 defaultBpyScript.append("    trunk = bpy.context.active_object\n");
                 defaultBpyScript.append("    trunk.rotation_euler = (random.uniform(-0.15, 0.15), random.uniform(-0.15, 0.15), 0)\n");
                 defaultBpyScript.append("    trunk.data.materials.append(mat_wood)\n");
-                defaultBpyScript.append("    # Palm Leaves\n");
                 defaultBpyScript.append("    for r_angle in [0, 1.05, 2.09, 3.14, 4.19, 5.24]:\n");
                 defaultBpyScript.append("        bpy.ops.mesh.primitive_plane_add(size=1, location=(tx, ty, 4.8))\n");
                 defaultBpyScript.append("        leaf = bpy.context.active_object\n");
@@ -516,7 +540,7 @@ public class PromptInterpreter {
                             .setParam("assetId", assetId)
                             .setParam("bpyScript", defaultBpyScript.toString()));
 
-            if (referenceTaskId != null) cloudNode.addDependency(referenceTaskId);
+            cloudNode.addDependency(initialDependency);
             graph.addTask(cloudNode);
             geometryTaskIds.add(cloudTaskId);
             leafTaskIds.add(cloudTaskId);
@@ -531,7 +555,7 @@ public class PromptInterpreter {
                     String tMeshId = "task_" + taskCounter++;
                     TaskNode tMesh = new TaskNode(tMeshId, "Generating " + entry.getName() + " Mesh", "Tool: character.create_humanoid",
                             new ToolOperation("character.create_humanoid").setParam("name", entry.getName()).setParam("style", style).setParam("height", 1.8f));
-                    if (referenceTaskId != null) tMesh.addDependency(referenceTaskId);
+                    tMesh.addDependency(initialDependency);
                     graph.addTask(tMesh);
                     geometryTaskIds.add(tMeshId);
 
@@ -561,7 +585,7 @@ public class PromptInterpreter {
                     String tCreatureId = "task_" + taskCounter++;
                     TaskNode tCreature = new TaskNode(tCreatureId, "Generating " + entry.getName() + " Anatomy", "Tool: character.create_creature",
                             new ToolOperation("character.create_creature").setParam("species", species).setParam("name", entry.getName()));
-                    if (referenceTaskId != null) tCreature.addDependency(referenceTaskId);
+                    tCreature.addDependency(initialDependency);
                     graph.addTask(tCreature);
                     geometryTaskIds.add(tCreatureId);
 
@@ -578,7 +602,7 @@ public class PromptInterpreter {
                     String tStructId = "task_" + taskCounter++;
                     TaskNode tStruct = new TaskNode(tStructId, "Building " + entry.getName(), "Tool: geometry.create_procedural",
                             new ToolOperation("geometry.create_procedural").setParam("type", conceptId).setParam("name", entry.getName()));
-                    if (referenceTaskId != null) tStruct.addDependency(referenceTaskId);
+                    tStruct.addDependency(initialDependency);
                     graph.addTask(tStruct);
                     geometryTaskIds.add(tStructId);
                     
@@ -627,6 +651,12 @@ public class PromptInterpreter {
         if (toolCalls == null || toolCalls.isEmpty()) {
             return createProductionPlan(request.getUserPrompt(), request.getStyle(), request.getTargetEngine(), request.getReferenceImageUris());
         }
+
+        // Initial Canvas Reset Root Task
+        String rootClearId = "task_ai_root_clear";
+        TaskNode rootClearNode = new TaskNode(rootClearId, "Resetting Scene Canvas", "Tool: scene.clear",
+                new ToolOperation("scene.clear"));
+        graph.addTask(rootClearNode);
 
         // ENFORCE CONTRACT: Run raw Gemini tool calls through PlanValidator to resolve capabilities
         ToolRegistry toolRegistry = new ToolRegistry();
@@ -692,9 +722,12 @@ public class PromptInterpreter {
                 if (isModifier) {
                     if (lastGeometryTaskId != null) {
                         dependencies.add(lastGeometryTaskId);
+                    } else {
+                        dependencies.add(rootClearId);
                     }
                 } else {
-                    // Check if it is a geometry or character creation tool
+                    // Geometry or character creation tool: always depends on the canvas clear
+                    dependencies.add(rootClearId);
                     boolean isGeometryCreator = toolId.contains("geometry.create_") ||
                                                 toolId.contains("character.create_") ||
                                                 toolId.contains("blender.cloud_generate");
@@ -725,7 +758,7 @@ public class PromptInterpreter {
                 "Inspecting Generated Scene Integrity", new ToolOperation("validation.check_mesh"));
 
         for (TaskNode node : graph.getAllNodes()) {
-            if (!dependencyTargets.contains(node.getId())) {
+            if (!dependencyTargets.contains(node.getId()) && !node.getId().equals(rootClearId)) {
                 validationNode.addDependency(node.getId());
             }
         }
